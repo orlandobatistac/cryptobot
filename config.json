@@ -1,0 +1,40 @@
+{
+    "general": {
+        "initial_capital": 10000,
+        "trade_fee": 0.001,
+        "investment_fraction": 1.0,
+        "log_file": "debug.log",
+        "results_cleanup_limit": 5,
+        "enable_optimization": true,
+        "generate_sample_data": false
+    },
+    "strategy": {
+        "sma_short": 5,
+        "sma_long": 68,
+        "rsi_period": 23,
+        "rsi_threshold": 86,
+        "macd_fast": 16,
+        "macd_slow": 38,
+        "macd_signal": 13,
+        "volume_sma_period": 8,
+        "atr_period": 6,
+        "adx_period": 12,
+        "adx_threshold": 11,
+        "bollinger_period": 25,
+        "bollinger_std_dev": 2.6230976081119857,
+        "supertrend_multiplier": 2.477545644354482,
+        "stop_loss_atr_multiplier": 1.852355084847991,
+        "trailing_stop_percentage": 0.04945534820095881
+    },
+    "optimization": {
+        "n_trials": 50,
+        "optimization_results_dir": "results/optimization"
+    },
+    "data": {
+        "start_date": "2020-01-01",
+        "end_date": "2025-04-05",
+        "interval": "1D",
+        "data_file_path": "data/ohlc_data_60min_all_years.parquet",
+        "output_dir": "results/backtest"
+    }
+}
