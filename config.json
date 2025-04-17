@@ -1,0 +1,53 @@
+{
+    "general": {
+        "initial_capital": 1000,
+        "trade_fee": 0.0026,
+        "spread": 0.00015,
+        "slippage": 0.0001,
+        "investment_fraction": 1.0,
+        "log_file": "debug.log",
+        "results_cleanup_limit": 5,
+        "enable_optimization": false,
+        "generate_sample_data": false
+    },
+    "strategy": {
+        "sma_short": 23,
+        "sma_long": 59,
+        "rsi_period": 31,
+        "rsi_threshold": 80,
+        "macd_fast": 28,
+        "macd_slow": 28,
+        "macd_signal": 20,
+        "volume_sma_period": 42,
+        "atr_period": 28,
+        "adx_period": 18,
+        "adx_threshold": 42,
+        "bollinger_period": 13,
+        "bollinger_std_dev": 1.7167414430953063,
+        "supertrend_multiplier": 4.582010741564044,
+        "use_supertrend": true,
+        "macd_threshold": 21,
+        "stop_loss_atr_multiplier": 4.483002289162521,
+        "use_adx_positive": true,
+        "use_macd_positive": false,
+        "trailing_stop_percentage": 0.08080842574238917,
+        "take_profit_multiplier": 29.64419117366248,
+        "stop_loss_multiplier": 1.4782417814519329,
+        "time_based_stop_days": 4,
+        "time_based_stop_loss_percent": -3.235869970714151,
+        "lateral_adx_threshold": 28,
+        "support_margin": 1.095738682701226,
+        "resistance_margin": 0.9170253010429544
+    },
+    "optimization": {
+        "n_trials": 500,
+        "optimization_results_dir": "results/optimization"
+    },
+    "data": {
+        "start_date": "2020-01-01",
+        "end_date": "2025-04-05",
+        "interval": "1D",
+        "data_file_path": "data/ohlc_data_60min_all_years.parquet",
+        "output_dir": "results/backtest"
+    }
+}

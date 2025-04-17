@@ -1,0 +1,30 @@
+# Log files
+debug.log
+*.log
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Config files
+*.env
+.env.*
+secrets.json
+commands.md
+
+# Data folders
+# data/
+# results/
+
+# VSCode
+.vscode/
+
+# System files
+.DS_Store
+Thumbs.db
+optuna_study.db
