@@ -1,9 +1,9 @@
-# requirements.txt for CryptoBot
-pandas==2.2.2
-numpy==1.26.4
-mplfinance==0.12.10b0
-tqdm==4.66.4
 colorama==0.4.6
-optuna==3.6.1
-pyarrow==16.0.0
 matplotlib==3.8.4
+mplfinance==0.12.10b0
+numpy==2.2.4
+optuna==3.6.1
+pandas==2.2.3
+Requests==2.32.3
+tqdm==4.66.4
+pyarrow==19.0.1
