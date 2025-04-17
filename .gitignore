@@ -28,3 +28,4 @@ commands.md
 .DS_Store
 Thumbs.db
 optuna_study.db
+paper_trades.db

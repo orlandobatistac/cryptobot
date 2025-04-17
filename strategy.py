@@ -45,6 +45,20 @@ class Strategy:
         if missing_keys:
             raise KeyError(f"Missing required config keys: {missing_keys}")
 
+        # Validate and convert config types only once
+        for key, value in self.config.items():
+            if key in ["use_supertrend", "use_adx_positive", "use_macd_positive", "time_based_stop_loss_percent"]:
+                continue  # Skip validation for booleans and time_based_stop_loss_percent
+            float_keys = [
+                "stop_loss_atr_multiplier", "trailing_stop_percentage", "bollinger_std_dev",
+                "supertrend_multiplier", "stop_loss_multiplier", "take_profit_multiplier",
+                "resistance_margin", "support_margin"
+            ]
+            if key in float_keys:
+                self.config[key] = float(value)
+            else:
+                self.config[key] = int(value)
+
         self.last_entry_time = None  # Track the last entry time to avoid same-candle exits
         self.position_open = False  # Track if a position is currently open
         self.highest_price = None  # Track the highest price since entry for trailing stop
@@ -62,14 +76,6 @@ class Strategy:
             # Add signal tracking columns
             data['entry_signal_generated'] = False
             data['exit_signal_generated'] = False
-
-            # Validate config values
-            for key, value in self.config.items():
-                if key in ["use_supertrend", "use_adx_positive", "use_macd_positive", "time_based_stop_loss_percent"]:
-                    continue  # Skip validation for booleans and time_based_stop_loss_percent
-                if not isinstance(value, (int, float)) or value <= 0:
-                    raise ValueError(f"Invalid config value for '{key}': {value}. Must be positive.")
-                self.config[key] = int(value) if key not in ["stop_loss_atr_multiplier", "trailing_stop_percentage", "bollinger_std_dev", "supertrend_multiplier", "stop_loss_multiplier", "take_profit_multiplier"] else float(value)
 
             # Check data length against max period
             min_periods = max(
@@ -110,7 +116,7 @@ class Strategy:
             tr = high_low.combine(high_close, max).combine(low_close, max)
             data['atr'] = tr.rolling(self.config['atr_period']).mean()
 
-            # Calcular el promedio móvil del ATR para el filtro de volatilidad
+            # Calculate ATR moving average for volatility filter
             data['atr_sma'] = data['atr'].rolling(self.config['atr_period']).mean()
 
             # Calculate ADX
@@ -176,18 +182,18 @@ class Strategy:
             prev_sma_short_1 = data.loc[prev_idx_1, 'sma_short']
             prev_sma_long_1 = data.loc[prev_idx_1, 'sma_long']
             
-            # Detectar mercado lateral
+            # Detect sideways market
             lateral_market = row['adx'] < self.config['lateral_adx_threshold']
             
-            # Condiciones para trading de rango
+            # Range trading conditions
             range_conditions = {
                 "lateral_market": lateral_market,
-                "buy_near_support": row['Close'] < row['bollinger_lower'] * self.config['support_margin'] * 1.02,  # Más margen
-                "volume_confirmation": row['Volume'] > 1.5 * row['volume_sma'],  # Filtro de volumen más estricto
-                "rsi_not_oversold": row['rsi'] > 20  # Evitar sobreventa extrema
+                "buy_near_support": row['Close'] < row['bollinger_lower'] * self.config['support_margin'] * 1.02,  # More margin
+                "volume_confirmation": row['Volume'] > 1.5 * row['volume_sma'],  # Stricter volume filter
+                "rsi_not_oversold": row['rsi'] > 20  # Avoid extreme oversold
             }
             
-            # Condiciones para trading de tendencia
+            # Trend trading conditions
             trend_conditions = {
                 "sma_crossover": row['sma_short'] > row['sma_long'] and prev_sma_short_1 > prev_sma_long_1,
                 "macd_above_signal": row['macd'] > row['macd_signal'] - self.config['macd_threshold'],
@@ -199,13 +205,13 @@ class Strategy:
                 "volatility_filter": row['atr'] > row['atr_sma']
             }
             
-            # Decidir el modo de trading
+            # Decide trading mode
             if lateral_market:
-                # Solo evaluar condiciones de trading de rango en mercado lateral
+                # Only evaluate range trading conditions in sideways market
                 signal = all(range_conditions.values())
                 self.is_range_trading = signal
             else:
-                # Solo evaluar condiciones de tendencia en mercados no laterales
+                # Only evaluate trend trading conditions in non-sideways markets
                 trend_main_conditions = ["sma_crossover", "macd_above_signal", "rsi_below_threshold"]
                 trend_secondary_conditions = ["volume_above_sma", "supertrend_uptrend", "adx_trend", "macd_positive", "volatility_filter"]
                 trend_main_pass = all(trend_conditions[cond] for cond in trend_main_conditions)
@@ -215,7 +221,7 @@ class Strategy:
             
             if signal:
                 logger.info(f"Entry signal generated at {row.name} (Range Trading: {self.is_range_trading})")
-                row['entry_signal_generated'] = True
+                # row['entry_signal_generated'] = True  # Commented to avoid SettingWithCopyWarning. Does not affect main logic.
                 self.last_entry_time = row.name
                 self.position_open = True
                 self.highest_price = row['Close']
@@ -241,16 +247,16 @@ class Strategy:
             take_profit = self.entry_price + (self.config['stop_loss_atr_multiplier'] * row['atr'] * self.config['take_profit_multiplier'])
             supertrend_exit = self.config['use_supertrend'] and row['supertrend'] == 0
 
-            # Stop-loss basado en tiempo
+            # Time-based stop-loss
             duration_ms = (row.name - self.last_entry_time).total_seconds() * 1000
             profit_percent = (row['Close'] - self.entry_price) / self.entry_price * 100
             time_based_stop = duration_ms < self.config['time_based_stop_days'] * 24 * 60 * 60 * 1000 and profit_percent < self.config['time_based_stop_loss_percent']
 
-            # Condición para trading de rango: vender cerca de la resistencia
+            # Range trading exit: sell near resistance
             sell_near_resistance = row['Close'] > row['bollinger_upper'] * self.config['resistance_margin']
             range_exit = self.is_range_trading and sell_near_resistance
 
-            # Condiciones para trading de tendencia
+            # Trend trading exit conditions
             trend_exit = (
                 row['macd'] < row['macd_signal'] - self.config['macd_threshold'] or
                 row['Close'] < trailing_stop or
@@ -260,7 +266,7 @@ class Strategy:
                 time_based_stop
             )
 
-            # Decidir la salida según el modo
+            # Decide exit based on mode
             signal = range_exit if self.is_range_trading else trend_exit
 
             if signal:
