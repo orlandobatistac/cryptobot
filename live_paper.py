@@ -9,8 +9,34 @@ from datetime import datetime, timedelta
 from strategy import Strategy
 from logger import logger
 from colorama import init, Fore, Style
+import functools
+import sys
+import threading
+from inputimeout import inputimeout, TimeoutOccurred
 
 init(autoreset=True)
+
+# Retry decorator for robustness
+def retry(ExceptionToCheck, tries=3, delay=2, backoff=2, logger=None):
+    def deco_retry(f):
+        @functools.wraps(f)
+        def f_retry(*args, **kwargs):
+            mtries, mdelay = tries, delay
+            while mtries > 1:
+                try:
+                    return f(*args, **kwargs)
+                except ExceptionToCheck as e:
+                    msg = f"{f.__name__}: {str(e)}, Retrying in {mdelay} seconds... ({mtries-1} tries left)"
+                    if logger:
+                        logger.warning(msg)
+                    else:
+                        print(msg)
+                    time.sleep(mdelay)
+                    mtries -= 1
+                    mdelay *= backoff
+            return f(*args, **kwargs)
+        return f_retry
+    return deco_retry
 
 # Load configuration
 def load_config():
@@ -45,69 +71,86 @@ def setup_database():
     conn.commit()
     conn.close()
 
-# Get latest OHLC from Kraken
+@retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
 def get_latest_candle(pair, interval):
-    resp = k.query_public('OHLC', {'pair': pair, 'interval': interval})
-    if resp["error"]:
-        logger.error(f"Kraken API error: {resp['error']}")
-        return None
-    ohlc = resp["result"][list(resp["result"].keys())[0]]
-    df = pd.DataFrame(ohlc, columns=["time", "open", "high", "low", "close", "vwap", "volume", "count"])
-    df["time"] = pd.to_datetime(df["time"], unit="s")
-    df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
-    # Rename columns to uppercase for Strategy compatibility
-    df = df.rename(columns={
-        "open": "Open",
-        "high": "High",
-        "low": "Low",
-        "close": "Close",
-        "volume": "Volume"
-    })
-    return df
+    try:
+        resp = k.query_public('OHLC', {'pair': pair, 'interval': interval})
+        if resp["error"]:
+            logger.error(f"Kraken API error: {resp['error']}")
+            return None
+        ohlc = resp["result"][list(resp["result"].keys())[0]]
+        df = pd.DataFrame(ohlc, columns=["time", "open", "high", "low", "close", "vwap", "volume", "count"])
+        df["time"] = pd.to_datetime(df["time"], unit="s")
+        df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
+        # Rename columns to uppercase for Strategy compatibility
+        df = df.rename(columns={
+            "open": "Open",
+            "high": "High",
+            "low": "Low",
+            "close": "Close",
+            "volume": "Volume"
+        })
+        logger.info("Fetched latest OHLC candle from Kraken API.")
+        return df
+    except Exception as e:
+        logger.error(f"Exception in get_latest_candle: {e}")
+        raise
 
-# Save trade to database
+@retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
 def save_trade(trade_type, price, volume, profit, balance):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT INTO trades (timestamp, type, price, volume, profit, balance) VALUES (?, ?, ?, ?, ?, ?)",
-              (datetime.utcnow().isoformat(), trade_type, price, volume, profit, balance))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("INSERT INTO trades (timestamp, type, price, volume, profit, balance) VALUES (?, ?, ?, ?, ?, ?)",
+                  (datetime.utcnow().isoformat(), trade_type, price, volume, profit, balance))
+        conn.commit()
+        logger.info(f"Trade saved: {trade_type} {volume} @ {price}, profit: {profit}, balance: {balance}")
+    except Exception as e:
+        logger.error(f"Exception in save_trade: {e}")
+        raise
+    finally:
+        conn.close()
 
-# Retrieve open position
+@retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
 def get_open_position():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    # Find the last 'buy' operation without a subsequent 'sell'
-    c.execute('''
-        SELECT id, timestamp, price, volume, balance
-        FROM trades
-        WHERE type = 'buy'
-        ORDER BY id DESC LIMIT 1
-    ''')
-    last_buy = c.fetchone()
-    if last_buy:
-        buy_id, buy_time, buy_price, buy_volume, buy_balance = last_buy
-        # Check if there is a 'sell' after this 'buy'
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        # Find the last 'buy' operation without a subsequent 'sell'
         c.execute('''
-            SELECT id FROM trades
-            WHERE type = 'sell' AND id > ?
-            ORDER BY id ASC LIMIT 1
-        ''', (buy_id,))
-        sell = c.fetchone()
-        if not sell:
-            # There is an open position
+            SELECT id, timestamp, price, volume, balance
+            FROM trades
+            WHERE type = 'buy'
+            ORDER BY id DESC LIMIT 1
+        ''')
+        last_buy = c.fetchone()
+        if last_buy:
+            buy_id, buy_time, buy_price, buy_volume, buy_balance = last_buy
+            # Check if there is a 'sell' after this 'buy'
+            c.execute('''
+                SELECT id FROM trades
+                WHERE type = 'sell' AND id > ?
+                ORDER BY id ASC LIMIT 1
+            ''', (buy_id,))
+            sell = c.fetchone()
+            if not sell:
+                logger.info(f"Open position found: entry {buy_price}, volume {buy_volume}")
+                return {
+                    "entry_price": buy_price,
+                    "volume": buy_volume,
+                    "entry_time": pd.to_datetime(buy_time),
+                    # Fee/slippage/spread is not stored here, but you could if you save them in the table
+                }
+        return None
+    except Exception as e:
+        logger.error(f"Exception in get_open_position: {e}")
+        raise
+    finally:
+        try:
             conn.close()
-            return {
-                "entry_price": buy_price,
-                "volume": buy_volume,
-                "entry_time": pd.to_datetime(buy_time),
-                # Fee/slippage/spread is not stored here, but you could if you save them in the table
-            }
-    conn.close()
-    return None
+        except:
+            pass
 
-# Update parquet file
 def update_parquet():
     print("Updating prices...")
     with open(os.devnull, 'w') as devnull:
@@ -115,18 +158,31 @@ def update_parquet():
             "python", "data/update_data.py"
         ], check=True, stdout=devnull, stderr=devnull)
 
-# Get real-time price
+@retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
 def get_realtime_price(pair):
-    resp = k.query_public('Ticker', {'pair': pair})
-    if resp["error"]:
-        logger.error(f"Kraken API error: {resp['error']}")
-        return None
-    ticker = resp["result"][list(resp["result"].keys())[0]]
-    return float(ticker["c"][0])  # 'c' is the closing price (last trade)
+    try:
+        resp = k.query_public('Ticker', {'pair': pair})
+        if resp["error"]:
+            logger.error(f"Kraken API error: {resp['error']}")
+            return None
+        ticker = resp["result"][list(resp["result"].keys())[0]]
+        logger.info(f"Fetched real-time price: {ticker['c'][0]}")
+        return float(ticker["c"][0])  # 'c' is the closing price (last trade)
+    except Exception as e:
+        logger.error(f"Exception in get_realtime_price: {e}")
+        raise
 
 # Clear console
 def clear_console():
     os.system('cls' if os.name == 'nt' else 'clear')
+
+def input_with_timeout(prompt, timeout):
+    try:
+        return inputimeout(prompt=prompt, timeout=timeout)
+    except TimeoutOccurred:
+        return ''
+    except (EOFError, KeyboardInterrupt):
+        return ''
 
 # Main paper trading loop
 def main():
@@ -185,24 +241,75 @@ def main():
                     equity = balance + (realtime_price * position['volume']) + pl_realtime
                     now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
                     pl_color = Fore.GREEN if pl_realtime >= 0 else Fore.RED
-                    equity_color = Fore.GREEN if equity >= GENERAL_CONFIG["initial_capital"] else Fore.RED
-                    print("\n" + "="*40)
+                    balance_color = Fore.GREEN if equity >= GENERAL_CONFIG["initial_capital"] else Fore.RED
+                    print("\n" + Fore.CYAN + "="*40 + Style.RESET_ALL)
                     print(f"CYCLE {cycle} | {now} UTC\n")
                     print(f"Open trade: {Fore.CYAN}BUY {position['volume']:.6f} BTC @ ${position['entry_price']:,.2f}{Style.RESET_ALL}")
                     print(f"Current BTCUSD:  {Fore.YELLOW}${realtime_price:,.2f}{Style.RESET_ALL}")
                     print(f"P/L real-time:  {pl_color}${pl_realtime:,.2f}{Style.RESET_ALL}")
-                    print(f"Equity:         {equity_color}${equity:,.2f}{Style.RESET_ALL}")
-                    print("="*40 + "\n")
+                    print(f"Current Balance: {balance_color}${equity:,.2f}{Style.RESET_ALL}")
+                    print(Fore.CYAN + "="*40 + Style.RESET_ALL + "\n")
             else:
                 realtime_price = get_realtime_price(PAIR)
-                print("\n" + "="*40)
+                print("\n" + Fore.CYAN + "="*40 + Style.RESET_ALL)
                 print(f"CYCLE {cycle} | {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n")
-                print(f"No open trade currently.")
+                print(f"Open trade: {Fore.LIGHTBLACK_EX}No open trade currently.{Style.RESET_ALL}")
                 if realtime_price:
                     print(f"Current BTCUSD:  {Fore.YELLOW}${realtime_price:,.2f}{Style.RESET_ALL}")
-                print("="*40 + "\n")
-            # Wait for the close of the next candle
-            time.sleep(INTERVAL * 60)
+                else:
+                    print("Current BTCUSD:  N/A")
+                print(f"P/L real-time: {Fore.LIGHTBLACK_EX}N/A{Style.RESET_ALL}")
+                print(f"Current Balance: {Fore.GREEN if balance >= GENERAL_CONFIG['initial_capital'] else Fore.RED}${balance:,.2f}{Style.RESET_ALL}")
+                print(Fore.CYAN + "="*40 + Style.RESET_ALL + "\n")
+
+            # Show available commands to the user
+            print("Available commands:")
+            print("[b] Buy at current price  ")
+            print("[s] Sell (close position)  ")
+            print("[q] Quit bot  \n")
+            # Prompt for user input with timeout (INTERVAL * 60 seconds)
+            user_input = input_with_timeout("Press Enter after choosing an option: ", INTERVAL * 60).strip().lower()
+            print()  # Ensure a blank line after input for clarity
+
+            if user_input == 'q':
+                print("\nBot stopped by user (q).\n")
+                logger.info("Bot stopped by user (q).")
+                break
+            elif user_input == 'b' and not position:
+                # Simulate buy
+                if not realtime_price:
+                    print("Cannot buy: real-time price unavailable.")
+                else:
+                    invest_amount = balance * investment_fraction
+                    volume = invest_amount / realtime_price
+                    balance -= invest_amount
+                    save_trade('buy', realtime_price, volume, 0, balance)
+                    position = {
+                        'entry_price': realtime_price,
+                        'volume': volume,
+                        'entry_time': datetime.utcnow()
+                    }
+                    print(f"Simulated BUY: {volume:.6f} BTC @ ${realtime_price:,.2f}")
+                    logger.info(f"Simulated BUY: {volume:.6f} BTC @ ${realtime_price:,.2f}")
+            elif user_input == 's' and position:
+                # Simulate sell
+                if not realtime_price:
+                    print("Cannot sell: real-time price unavailable.")
+                else:
+                    pl = (realtime_price - position['entry_price']) * position['volume']
+                    pl -= (position['entry_price'] + realtime_price) * position['volume'] * trade_fee
+                    balance += (realtime_price * position['volume']) + pl
+                    save_trade('sell', realtime_price, position['volume'], pl, balance)
+                    print(f"Simulated SELL: {position['volume']:.6f} BTC @ ${realtime_price:,.2f} | P/L: ${pl:,.2f}")
+                    logger.info(f"Simulated SELL: {position['volume']:.6f} BTC @ ${realtime_price:,.2f} | P/L: ${pl:,.2f}")
+                    position = None
+            elif user_input == 'b' and position:
+                print("You already have an open position. Close it before buying again.")
+            elif user_input == 's' and not position:
+                print("No open position to sell.")
+            # else: just continue
+
+            # If user_input was empty (timeout), just continue to next cycle
     except KeyboardInterrupt:
         print("\nBot manually stopped by user (Ctrl+C).\n")
         logger.info("Bot manually stopped by user (Ctrl+C).")
