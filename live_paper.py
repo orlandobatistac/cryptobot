@@ -13,8 +13,34 @@ import functools
 import sys
 import threading
 from inputimeout import inputimeout, TimeoutOccurred
+import functools
+import sys
+import threading
+from inputimeout import inputimeout, TimeoutOccurred
 
 init(autoreset=True)
+
+# Retry decorator for robustness
+def retry(ExceptionToCheck, tries=3, delay=2, backoff=2, logger=None):
+    def deco_retry(f):
+        @functools.wraps(f)
+        def f_retry(*args, **kwargs):
+            mtries, mdelay = tries, delay
+            while mtries > 1:
+                try:
+                    return f(*args, **kwargs)
+                except ExceptionToCheck as e:
+                    msg = f"{f.__name__}: {str(e)}, Retrying in {mdelay} seconds... ({mtries-1} tries left)"
+                    if logger:
+                        logger.warning(msg)
+                    else:
+                        print(msg)
+                    time.sleep(mdelay)
+                    mtries -= 1
+                    mdelay *= backoff
+            return f(*args, **kwargs)
+        return f_retry
+    return deco_retry
 
 # Retry decorator for robustness
 def retry(ExceptionToCheck, tries=3, delay=2, backoff=2, logger=None):
@@ -82,6 +108,7 @@ def setup_database():
     conn.close()
 
 @retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
+@retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
 def get_latest_candle(pair, interval):
     try:
         resp = k.query_public('OHLC', {'pair': pair, 'interval': interval})
@@ -122,6 +149,7 @@ def save_trade(trade_type, price, volume, profit, balance, source='manual'):
     finally:
         conn.close()
 
+@retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
 @retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
 def get_open_position():
     try:
@@ -177,7 +205,19 @@ def update_parquet():
         ], check=True, stdout=devnull, stderr=devnull)
 
 @retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
+@retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
 def get_realtime_price(pair):
+    try:
+        resp = k.query_public('Ticker', {'pair': pair})
+        if resp["error"]:
+            logger.error(f"Kraken API error: {resp['error']}")
+            return None
+        ticker = resp["result"][list(resp["result"].keys())[0]]
+        logger.info(f"Fetched real-time price: {ticker['c'][0]}")
+        return float(ticker["c"][0])  # 'c' is the closing price (last trade)
+    except Exception as e:
+        logger.error(f"Exception in get_realtime_price: {e}")
+        raise
     try:
         resp = k.query_public('Ticker', {'pair': pair})
         if resp["error"]:
@@ -193,6 +233,14 @@ def get_realtime_price(pair):
 # Clear console
 def clear_console():
     os.system('cls' if os.name == 'nt' else 'clear')
+
+def input_with_timeout(prompt, timeout):
+    try:
+        return inputimeout(prompt=prompt, timeout=timeout)
+    except TimeoutOccurred:
+        return ''
+    except (EOFError, KeyboardInterrupt):
+        return ''
 
 def input_with_timeout(prompt, timeout):
     try:
@@ -266,16 +314,22 @@ def main():
                     pl_color = Fore.GREEN if pl_realtime >= 0 else Fore.RED
                     balance_color = Fore.GREEN if equity >= GENERAL_CONFIG["initial_capital"] else Fore.RED
                     print("\n" + Fore.CYAN + "="*40 + Style.RESET_ALL)
+                    balance_color = Fore.GREEN if equity >= GENERAL_CONFIG["initial_capital"] else Fore.RED
+                    print("\n" + Fore.CYAN + "="*40 + Style.RESET_ALL)
                     print(f"CYCLE {cycle} | {now} UTC\n")
                     print(f"Open trade: {Fore.CYAN}BUY {position['volume']:.6f} BTC @ ${position['entry_price']:,.2f} on {position['entry_time'].strftime('%Y-%m-%d %H:%M:%S')}{Style.RESET_ALL}")
                     print(f"Current BTCUSD:  {Fore.YELLOW}${realtime_price:,.2f}{Style.RESET_ALL}")
                     print(f"P/L real-time:  {pl_color}${pl_realtime:,.2f}{Style.RESET_ALL}")
                     print(f"Current Balance: {balance_color}${equity:,.2f}{Style.RESET_ALL}")
                     print(Fore.CYAN + "="*40 + Style.RESET_ALL + "\n")
+                    print(f"Current Balance: {balance_color}${equity:,.2f}{Style.RESET_ALL}")
+                    print(Fore.CYAN + "="*40 + Style.RESET_ALL + "\n")
             else:
                 realtime_price = get_realtime_price(PAIR)
                 print("\n" + Fore.CYAN + "="*40 + Style.RESET_ALL)
+                print("\n" + Fore.CYAN + "="*40 + Style.RESET_ALL)
                 print(f"CYCLE {cycle} | {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n")
+                print(f"Open trade: {Fore.LIGHTBLACK_EX}No open trade currently.{Style.RESET_ALL}")
                 print(f"Open trade: {Fore.LIGHTBLACK_EX}No open trade currently.{Style.RESET_ALL}")
                 if realtime_price:
                     print(f"Current BTCUSD:  {Fore.YELLOW}${realtime_price:,.2f}{Style.RESET_ALL}")
