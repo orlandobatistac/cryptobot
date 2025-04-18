@@ -126,6 +126,31 @@ results/optimization/best_config_*.json
 
 ---
 
+## Automatic Strategy Evaluation (D1 Candle)
+
+The bot automatically evaluates the trading strategy at the close of each daily (D1) candle, while monitoring and user interaction remain real-time during each cycle.
+
+### How it works
+
+- **Data Loading and Resampling:**
+  - On each cycle, the bot loads OHLC data (60min) and resamples it to the configured interval (default: daily/D1).
+- **Automatic Evaluation:**
+  - After displaying the current state, the bot runs:
+    - `strategy.calculate_indicators(df_resampled)` to compute indicators.
+    - It checks the last daily candle.
+    - If `strategy.entry_signal(last_candle, df_resampled)` returns True and there is no open position, it triggers an automatic buy.
+    - If `strategy.exit_signal(last_candle, df_resampled)` returns True and there is an open position, it triggers an automatic sell.
+- **Order Simulation and Logging:**
+  - Before saving the trade, the order is validated with the Kraken API (using validate=True for paper trading).
+  - If validation is successful, the trade is saved to the database.
+
+### What this means
+
+- The bot automatically checks, on each cycle, whether to open or close a position based on your strategy logic, using the latest daily candle.
+- No manual intervention is required for the strategy to operate; the bot acts autonomously, but you can monitor or intervene manually at any time.
+
+---
+
 ## 📌 Notes
 
 - This bot **does not connect to exchanges** (yet).
