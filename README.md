@@ -10,9 +10,9 @@
 
 This project began as a personal mission to learn Python and explore the power of artificial intelligence in real-world applications. While the long-term goal is to build a live-trading AI bot, **CryptoBot** is the first working MVP focused on:
 
-- 📈 Strategy development & backtesting  
-- 🔍 Hyperparameter tuning with Optuna  
-- 📊 Visualizing and interpreting results  
+- 📈 Strategy development & backtesting
+- 🔍 Hyperparameter tuning with Optuna
+- 📊 Visualizing and interpreting results
 - 🤖 Creating the foundation for AI-driven trading
 
 It’s not perfect—but it’s proof of how far self-learning and AI co-creation can go.
@@ -38,32 +38,56 @@ cryptobot/
 ├── backtest.py               # Core backtesting engine
 ├── config.json               # Strategy and system configuration
 ├── data.py                   # Data loading & filtering
+├── live_paper.py             # Paper trading loop (simulated live trading)
 ├── logger.py                 # Logging system
 ├── main.py                   # Main runner with progress bar
 ├── optimize.py               # Strategy optimization via Optuna
 ├── strategy.py               # Indicators + entry/exit logic
 ├── requirements.txt          # Python dependencies
-├── results/                  # All output results
 ├── debug.log                 # Execution logs
-└── README.md                 # You’re here!
+├── paper_trades.db           # SQLite database for paper trading
+├── README.md                 # You’re here!
+├── data/
+│   ├── update_data.py        # Script to update/download OHLC data
+│   ├── check_data.py         # Script to inspect and validate OHLC data
+│   └── ohlc_data_60min_all_years.parquet # Main OHLC data file
+└── results/                  # All output results
+    └── backtest/             # Backtest results (metrics, trades, plots)
 ```
+
+---
+
+## 🆕 Main Features & Scripts
+
+- **backtest.py**: Core backtesting engine for strategies.
+- **main.py**: Main pipeline runner (can generate demo data).
+- **optimize.py**: Hyperparameter optimization using Optuna.
+- **strategy.py**: Technical indicators and entry/exit logic.
+- **live_paper.py**: Simulated live trading (paper trading) loop with real-time monitoring and database logging.
+- **data/update_data.py**: Downloads and updates OHLC data from Kraken, handles incremental updates and logging.
+- **data/check_data.py**: Inspects, validates, and summarizes OHLC data files; can fetch and compare with Kraken API.
+- **logger.py**: Centralized logging to debug.log.
+- **paper_trades.db**: SQLite database for storing simulated trades.
 
 ---
 
 ## ⚙️ Installation
 
 ### 1. Clone the repository
+
 ```bash
 git clone https://github.com/yourusername/cryptobot.git
 cd cryptobot
 ```
 
 ### 2. Install Python dependencies
+
 ```bash
 pip install -r requirements.txt
 ```
 
 ### 3. (Optional) Generate sample data
+
 ```bash
 python main.py  # config.json allows generating demo data
 ```
@@ -74,6 +98,7 @@ python main.py  # config.json allows generating demo data
 
 1. Configure your bot in `config.json`
 2. Run the full pipeline:
+
 ```bash
 python main.py
 ```
@@ -88,11 +113,13 @@ python main.py
 ## 🧠 Optimization (Optuna)
 
 To run strategy optimization:
+
 ```bash
 python optimize.py
 ```
 
 Best parameters are saved in:
+
 ```
 results/optimization/best_config_*.json
 ```
