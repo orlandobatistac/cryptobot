@@ -129,7 +129,6 @@ def get_latest_candle(pair, interval):
 
 @retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
 def save_trade(trade_type, price, volume, profit, balance, source='manual'):
-def save_trade(trade_type, price, volume, profit, balance, source='manual'):
     try:
         with DB_LOCK:
             conn = sqlite3.connect(DB_FILE, check_same_thread=False)
@@ -237,7 +236,6 @@ def update_parquet():
     print("Updating prices...")
     with open(os.devnull, 'w') as devnull:
         subprocess.run([
-            "python", update_script
             "python", update_script
         ], check=True, stdout=devnull, stderr=devnull)
 
