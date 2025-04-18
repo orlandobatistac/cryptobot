@@ -17,6 +17,10 @@ env/
 secrets.json
 commands.md
 
+# Security files
+*.key
+.key.*
+
 # Data folders
 # data/
 # results/

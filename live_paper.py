@@ -13,34 +13,12 @@ import functools
 import sys
 import threading
 from inputimeout import inputimeout, TimeoutOccurred
-import functools
-import sys
-import threading
-from inputimeout import inputimeout, TimeoutOccurred
+from dotenv import load_dotenv
 
 init(autoreset=True)
 
-# Retry decorator for robustness
-def retry(ExceptionToCheck, tries=3, delay=2, backoff=2, logger=None):
-    def deco_retry(f):
-        @functools.wraps(f)
-        def f_retry(*args, **kwargs):
-            mtries, mdelay = tries, delay
-            while mtries > 1:
-                try:
-                    return f(*args, **kwargs)
-                except ExceptionToCheck as e:
-                    msg = f"{f.__name__}: {str(e)}, Retrying in {mdelay} seconds... ({mtries-1} tries left)"
-                    if logger:
-                        logger.warning(msg)
-                    else:
-                        print(msg)
-                    time.sleep(mdelay)
-                    mtries -= 1
-                    mdelay *= backoff
-            return f(*args, **kwargs)
-        return f_retry
-    return deco_retry
+# Cargar variables de entorno desde .env
+load_dotenv()
 
 # Retry decorator for robustness
 def retry(ExceptionToCheck, tries=3, delay=2, backoff=2, logger=None):
@@ -75,11 +53,19 @@ GENERAL_CONFIG = CONFIG["general"]
 
 # Initialize Kraken connection
 k = krakenex.API()
+k.key = os.getenv('KRAKEN_API_KEY')
+k.secret = os.getenv('KRAKEN_API_SECRET')
 
 # Parameters
 PAIR = "XXBTZUSD"  # BTC/USD
 INTERVAL = 1  # minutes
 DB_FILE = "paper_trades.db"
+
+# Minimum volumes per pair (extend this dictionary as needed)
+MIN_VOLUME = {
+    'XXBTZUSD': 0.0001,  # 0.0001 BTC
+    # Add other pairs if needed
+}
 
 # Initialize threading lock for database operations
 DB_LOCK = threading.Lock()
@@ -107,7 +93,6 @@ def setup_database():
     conn.commit()
     conn.close()
 
-@retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
 @retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
 def get_latest_candle(pair, interval):
     try:
@@ -149,7 +134,6 @@ def save_trade(trade_type, price, volume, profit, balance, source='manual'):
     finally:
         conn.close()
 
-@retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
 @retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
 def get_open_position():
     try:
@@ -205,7 +189,6 @@ def update_parquet():
         ], check=True, stdout=devnull, stderr=devnull)
 
 @retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
-@retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
 def get_realtime_price(pair):
     try:
         resp = k.query_public('Ticker', {'pair': pair})
@@ -218,29 +201,51 @@ def get_realtime_price(pair):
     except Exception as e:
         logger.error(f"Exception in get_realtime_price: {e}")
         raise
+
+@retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
+def simulate_order(order_type, pair, volume, price=None, validate=True):
+    """
+    Simulate an order using Kraken's private API with validate=True.
+    order_type: 'buy' or 'sell'
+    pair: trading pair (e.g. 'XXBTZUSD')
+    volume: amount to trade
+    price: limit price (None for market)
+    validate: True for simulation (paper), False for real
+    Returns the API result if valid, None if fails.
+    """
+    # Check minimum volume
+    min_vol = MIN_VOLUME.get(pair, 0)
+    if volume < min_vol:
+        logger.warning(f"Volume {volume} is less than the minimum allowed ({min_vol}) for {pair}.")
+        print(f"[Simulation] Volume {volume} is less than the minimum allowed ({min_vol}) for {pair}.")
+        return None
+    order = {
+        'pair': pair,
+        'type': order_type,
+        'ordertype': 'market' if price is None else 'limit',
+        'volume': str(volume),
+        'validate': validate
+    }
+    if price is not None:
+        order['price'] = str(price)
     try:
-        resp = k.query_public('Ticker', {'pair': pair})
-        if resp["error"]:
-            logger.error(f"Kraken API error: {resp['error']}")
+        resp = k.query_private('AddOrder', order)
+        if resp.get('error'):
+            logger.warning(f"Kraken AddOrder error: {resp['error']}")
+            print(f"[Simulation] Kraken AddOrder error: {resp['error']}")
             return None
-        ticker = resp["result"][list(resp["result"].keys())[0]]
-        logger.info(f"Fetched real-time price: {ticker['c'][0]}")
-        return float(ticker["c"][0])  # 'c' is the closing price (last trade)
+        descr = resp.get('result', {}).get('descr', '')
+        print(f"[Simulation] Order validated: {descr}")
+        logger.info(f"Order simulation successful: {descr}")
+        return resp['result']
     except Exception as e:
-        logger.error(f"Exception in get_realtime_price: {e}")
-        raise
+        logger.error(f"Exception in simulate_order: {e}")
+        print(f"[Simulation] Error in simulate_order: {e}")
+        return None
 
 # Clear console
 def clear_console():
     os.system('cls' if os.name == 'nt' else 'clear')
-
-def input_with_timeout(prompt, timeout):
-    try:
-        return inputimeout(prompt=prompt, timeout=timeout)
-    except TimeoutOccurred:
-        return ''
-    except (EOFError, KeyboardInterrupt):
-        return ''
 
 def input_with_timeout(prompt, timeout):
     try:
@@ -277,8 +282,13 @@ def main():
     trades = []
     print(f"Paper trading started. Initial balance: ${balance:.2f}")
     print("The strategy is evaluated automatically at the close of each daily candle (D1). Monitoring is real-time.")
+    print("\nAvailable commands:")
+    print("[b] Buy at current price  ")
+    print("[s] Sell (close position)  ")
+    print("[q] Quit bot  \n")
     cycle = 0
     last_resampled_time = None
+
     try:
         while True:
             cycle += 1
@@ -304,6 +314,8 @@ def main():
             clear_console()
             for line in initial_summary:
                 print(line)
+            # Ensure user_input is always defined
+            user_input = ''
             if position is not None:
                 realtime_price = get_realtime_price(PAIR)
                 if realtime_price:
@@ -314,22 +326,16 @@ def main():
                     pl_color = Fore.GREEN if pl_realtime >= 0 else Fore.RED
                     balance_color = Fore.GREEN if equity >= GENERAL_CONFIG["initial_capital"] else Fore.RED
                     print("\n" + Fore.CYAN + "="*40 + Style.RESET_ALL)
-                    balance_color = Fore.GREEN if equity >= GENERAL_CONFIG["initial_capital"] else Fore.RED
-                    print("\n" + Fore.CYAN + "="*40 + Style.RESET_ALL)
                     print(f"CYCLE {cycle} | {now} UTC\n")
                     print(f"Open trade: {Fore.CYAN}BUY {position['volume']:.6f} BTC @ ${position['entry_price']:,.2f} on {position['entry_time'].strftime('%Y-%m-%d %H:%M:%S')}{Style.RESET_ALL}")
                     print(f"Current BTCUSD:  {Fore.YELLOW}${realtime_price:,.2f}{Style.RESET_ALL}")
                     print(f"P/L real-time:  {pl_color}${pl_realtime:,.2f}{Style.RESET_ALL}")
                     print(f"Current Balance: {balance_color}${equity:,.2f}{Style.RESET_ALL}")
                     print(Fore.CYAN + "="*40 + Style.RESET_ALL + "\n")
-                    print(f"Current Balance: {balance_color}${equity:,.2f}{Style.RESET_ALL}")
-                    print(Fore.CYAN + "="*40 + Style.RESET_ALL + "\n")
             else:
                 realtime_price = get_realtime_price(PAIR)
                 print("\n" + Fore.CYAN + "="*40 + Style.RESET_ALL)
-                print("\n" + Fore.CYAN + "="*40 + Style.RESET_ALL)
                 print(f"CYCLE {cycle} | {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n")
-                print(f"Open trade: {Fore.LIGHTBLACK_EX}No open trade currently.{Style.RESET_ALL}")
                 print(f"Open trade: {Fore.LIGHTBLACK_EX}No open trade currently.{Style.RESET_ALL}")
                 if realtime_price:
                     print(f"Current BTCUSD:  {Fore.YELLOW}${realtime_price:,.2f}{Style.RESET_ALL}")
@@ -352,19 +358,25 @@ def main():
                 invest_amount = balance * investment_fraction
                 if invest_amount >= 1e-8 and balance > 0:
                     volume = invest_amount / auto_price
-                    balance -= invest_amount
-                    # Use datetime.utcnow() if using realtime price, else use last_candle time
-                    if auto_price == last_candle['Close']:
-                        entry_time = last_candle.name.to_pydatetime() if hasattr(last_candle.name, 'to_pydatetime') else last_candle.name
+                    # Validate order with Kraken (simulation)
+                    order_result = simulate_order('buy', PAIR, volume, price=None, validate=True)
+                    if order_result:
+                        balance -= invest_amount
+                        # Use datetime.utcnow() if using realtime price, else last_candle time
+                        if auto_price == last_candle['Close']:
+                            entry_time = last_candle.name.to_pydatetime() if hasattr(last_candle.name, 'to_pydatetime') else last_candle.name
+                        else:
+                            entry_time = datetime.utcnow()
+                        save_trade('buy', auto_price, volume, 0, balance, source='auto')
+                        position = {
+                            'entry_price': auto_price,
+                            'volume': volume,
+                            'entry_time': entry_time
+                        }
+                        print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Auto BUY: {volume:.6f} BTC @ ${auto_price:,.2f}")
                     else:
-                        entry_time = datetime.utcnow()
-                    save_trade('buy', auto_price, volume, 0, balance, source='auto')
-                    position = {
-                        'entry_price': auto_price,
-                        'volume': volume,
-                        'entry_time': entry_time
-                    }
-                    print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Auto BUY: {volume:.6f} BTC @ ${auto_price:,.2f}")
+                        print(f"[AUTO] Buy order not validated. Trade not executed.")
+                        logger.warning("[AUTO] Buy order not validated. Trade not executed.")
             # Auto SELL
             elif position and strategy.exit_signal(last_candle, df_resampled):
                 auto_action = 'sell'
@@ -372,17 +384,22 @@ def main():
                 auto_price = get_realtime_price(PAIR) or last_candle['Close']
                 pl = (auto_price - position['entry_price']) * position['volume']
                 pl -= (position['entry_price'] + auto_price) * position['volume'] * trade_fee
-                balance += (auto_price * position['volume']) + pl
-                save_trade('sell', auto_price, position['volume'], pl, balance, source='auto')
-                print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Auto SELL: {position['volume']:.6f} BTC @ ${auto_price:,.2f} | P/L: ${pl:,.2f}")
-                position = None
+                # Validate order with Kraken (simulation)
+                order_result = simulate_order('sell', PAIR, position['volume'], price=None, validate=True)
+                if order_result:
+                    balance += (auto_price * position['volume']) + pl
+                    save_trade('sell', auto_price, position['volume'], pl, balance, source='auto')
+                    print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Auto SELL: {position['volume']:.6f} BTC @ ${auto_price:,.2f} | P/L: ${pl:,.2f}")
+                    position = None
+                else:
+                    print(f"[AUTO] Sell order not validated. Trade not executed.")
+                    logger.warning("[AUTO] Sell order not validated. Trade not executed.")
 
-            # Show available commands to the user
+            # Always show available commands and get user input
             print("Available commands:")
             print("[b] Buy at current price  ")
             print("[s] Sell (close position)  ")
             print("[q] Quit bot  \n")
-            # Prompt for user input with timeout (INTERVAL * 60 seconds)
             user_input = input_with_timeout("Press Enter after choosing an option: ", INTERVAL * 60).strip().lower()
             print()  # Ensure a blank line after input for clarity
 
@@ -402,15 +419,21 @@ def main():
                         print("Investment amount too small to execute a trade.")
                     else:
                         volume = invest_amount / realtime_price
-                        balance -= invest_amount
-                        save_trade('buy', realtime_price, volume, 0, balance, source='manual')
-                        position = {
-                            'entry_price': realtime_price,
-                            'volume': volume,
-                            'entry_time': datetime.utcnow()
-                        }
-                        print(f"Simulated BUY: {volume:.6f} BTC @ ${realtime_price:,.2f}")
-                        logger.info(f"Simulated BUY: {volume:.6f} BTC @ ${realtime_price:,.2f}")
+                        # Validate order with Kraken (simulation)
+                        order_result = simulate_order('buy', PAIR, volume, price=None, validate=True)
+                        if order_result:
+                            balance -= invest_amount
+                            save_trade('buy', realtime_price, volume, 0, balance, source='manual')
+                            position = {
+                                'entry_price': realtime_price,
+                                'volume': volume,
+                                'entry_time': datetime.utcnow()
+                            }
+                            print(f"Simulated BUY: {volume:.6f} BTC @ ${realtime_price:,.2f}")
+                            logger.info(f"Simulated BUY: {volume:.6f} BTC @ ${realtime_price:,.2f}")
+                        else:
+                            print("[MANUAL] Buy order not validated. Trade not executed.")
+                            logger.warning("[MANUAL] Buy order not validated. Trade not executed.")
             elif user_input == 's' and position:
                 # Simulate sell
                 if not realtime_price:
@@ -418,11 +441,17 @@ def main():
                 else:
                     pl = (realtime_price - position['entry_price']) * position['volume']
                     pl -= (position['entry_price'] + realtime_price) * position['volume'] * trade_fee
-                    balance += (realtime_price * position['volume']) + pl
-                    save_trade('sell', realtime_price, position['volume'], pl, balance, source='manual')
-                    print(f"Simulated SELL: {position['volume']:.6f} BTC @ ${realtime_price:,.2f} | P/L: ${pl:,.2f}")
-                    logger.info(f"Simulated SELL: {position['volume']:.6f} BTC @ ${realtime_price:,.2f} | P/L: ${pl:,.2f}")
-                    position = None
+                    # Validate order with Kraken (simulation)
+                    order_result = simulate_order('sell', PAIR, position['volume'], price=None, validate=True)
+                    if order_result:
+                        balance += (realtime_price * position['volume']) + pl
+                        save_trade('sell', realtime_price, position['volume'], pl, balance, source='manual')
+                        print(f"Simulated SELL: {position['volume']:.6f} BTC @ ${realtime_price:,.2f} | P/L: ${pl:,.2f}")
+                        logger.info(f"Simulated SELL: {position['volume']:.6f} BTC @ ${realtime_price:,.2f} | P/L: ${pl:,.2f}")
+                        position = None
+                    else:
+                        print("[MANUAL] Sell order not validated. Trade not executed.")
+                        logger.warning("[MANUAL] Sell order not validated. Trade not executed.")
             elif user_input == 'b' and position:
                 print("You already have an open position. Close it before buying again.")
             elif user_input == 's' and not position:
@@ -430,6 +459,8 @@ def main():
             # else: just continue
 
             # If user_input was empty (timeout), just continue to next cycle
+            # Wait for the configured interval before next cycle
+            time.sleep(INTERVAL * 60)
     except KeyboardInterrupt:
         print("\nBot manually stopped by user (Ctrl+C).\n")
         logger.info("Bot manually stopped by user (Ctrl+C).")
