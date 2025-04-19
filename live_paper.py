@@ -14,10 +14,12 @@ import sys
 import threading
 from inputimeout import inputimeout, TimeoutOccurred
 from dotenv import load_dotenv
+import requests
+from collections import deque
 
 init(autoreset=True)
 
-# Cargar variables de entorno desde .env
+# Load environment variables from .env
 load_dotenv()
 
 # Retry decorator for robustness
@@ -82,20 +84,71 @@ def setup_database():
         volume REAL,
         profit REAL,
         balance REAL,
+        fee REAL DEFAULT 0,
         source TEXT DEFAULT 'manual'
     )''')
-    # Try to add the column if upgrading an old DB
+    # Try to add the columns if upgrading an old DB
     try:
         c.execute("ALTER TABLE trades ADD COLUMN source TEXT DEFAULT 'manual'")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    try:
+        c.execute("ALTER TABLE trades ADD COLUMN fee REAL DEFAULT 0")
     except sqlite3.OperationalError:
         pass  # Column already exists
     conn.commit()
     conn.close()
 
+RATE_LIMIT_THRESHOLD = 2  # You can adjust this value as needed
+RATE_LIMIT_SLEEP = 3     # Seconds to wait if threshold is reached
+
+# --- Local rate limit tracking ---
+RATE_LIMIT_POINTS = 15  # Kraken standard limit
+RATE_LIMIT_WINDOW = 3   # Time window in seconds
+
+# Points per endpoint (based on experience/community)
+ENDPOINT_POINTS = {
+    'AddOrder': 2,  # Can be 2-4 according to docs, conservative
+    'CancelOrder': 1,
+    'Ticker': 1,
+    'OHLC': 1,
+    'TradeBalance': 1,
+    'AssetPairs': 1,
+    # Add other endpoints here if needed
+}
+
+api_call_times = deque()
+api_call_points = deque()
+
+def rate_limit_throttle(endpoint):
+    now = time.time()
+    # Remove calls outside the window
+    while api_call_times and now - api_call_times[0] > RATE_LIMIT_WINDOW:
+        api_call_times.popleft()
+        api_call_points.popleft()
+    # Calculate used points
+    used_points = sum(api_call_points)
+    endpoint_points = ENDPOINT_POINTS.get(endpoint, 1)
+    if used_points + endpoint_points > RATE_LIMIT_POINTS:
+        sleep_time = RATE_LIMIT_WINDOW - (now - api_call_times[0])
+        logger.warning(f"Local rate limit: {used_points} points used. Pausing {sleep_time:.2f}s to avoid lockout.")
+        time.sleep(max(sleep_time, 0.1))
+    # Register the call
+    api_call_times.append(time.time())
+    api_call_points.append(endpoint_points)
+
+def query_public_throttled(endpoint, *args, **kwargs):
+    rate_limit_throttle(endpoint)
+    return k.query_public(endpoint, *args, **kwargs)
+
+def query_private_throttled(endpoint, *args, **kwargs):
+    rate_limit_throttle(endpoint)
+    return k.query_private(endpoint, *args, **kwargs)
+
 @retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
 def get_latest_candle(pair, interval):
     try:
-        resp = k.query_public('OHLC', {'pair': pair, 'interval': interval})
+        resp = query_public_throttled('OHLC', {'pair': pair, 'interval': interval})
         if resp["error"]:
             logger.error(f"Kraken API error: {resp['error']}")
             return None
@@ -118,15 +171,15 @@ def get_latest_candle(pair, interval):
         raise
 
 @retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
-def save_trade(trade_type, price, volume, profit, balance, source='manual'):
+def save_trade(trade_type, price, volume, profit, balance, fee=0, source='manual'):
     try:
         with DB_LOCK:
             conn = sqlite3.connect(DB_FILE, check_same_thread=False)
             c = conn.cursor()
-            c.execute("INSERT INTO trades (timestamp, type, price, volume, profit, balance, source) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                      (datetime.utcnow().isoformat(), trade_type, price, volume, profit, balance, source))
+            c.execute("INSERT INTO trades (timestamp, type, price, volume, profit, balance, fee, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                      (datetime.utcnow().isoformat(), trade_type, price, volume, profit, balance, fee, source))
             conn.commit()
-            logger.info(f"Trade saved: {trade_type} {volume} @ {price}, profit: {profit}, balance: {balance}, source: {source}")
+            logger.info(f"Trade saved: {trade_type} {volume} @ {price}, profit: {profit}, balance: {balance}, fee: {fee}, source: {source}")
     except Exception as e:
         logger.error(f"Exception in save_trade: {e}")
         raise
@@ -190,7 +243,7 @@ def update_parquet():
 @retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
 def get_realtime_price(pair):
     try:
-        resp = k.query_public('Ticker', {'pair': pair})
+        resp = query_public_throttled('Ticker', {'pair': pair})
         if resp["error"]:
             logger.error(f"Kraken API error: {resp['error']}")
             return None
@@ -201,6 +254,26 @@ def get_realtime_price(pair):
         logger.error(f"Exception in get_realtime_price: {e}")
         raise
 
+def get_estimated_order_fee(pair, ordertype, volume):
+    """
+    Estimate the fee for a specific order using the Fee endpoint.
+    Returns the fee rate (as a float, e.g., 0.0026 for 0.26%) or None if unavailable.
+    """
+    if not k.key or not k.secret:
+        return None
+    try:
+        resp = query_private_throttled('Fee', {'pair': pair, 'type': ordertype, 'ordertype': ordertype, 'volume': str(volume)})
+        if resp.get('error'):
+            logger.warning(f"Kraken Fee endpoint error: {resp['error']}")
+            return None
+        # The fee is usually in resp['result']['fee'] as a percentage (e.g., 0.26)
+        fee_percent = resp.get('result', {}).get('fee')
+        if fee_percent is not None:
+            return float(fee_percent) / 100.0  # Convert percent to fraction
+    except Exception as e:
+        logger.error(f"Error querying order fee: {e}")
+    return None
+
 @retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
 def simulate_order(order_type, pair, volume, price=None, validate=True):
     """
@@ -210,10 +283,24 @@ def simulate_order(order_type, pair, volume, price=None, validate=True):
     volume: amount to trade
     price: limit price (None for market)
     validate: True for simulation (paper), False for real
-    Returns the API result if valid, None if fails.
+    Returns a dict with simulated order status and details.
     """
+    # Estimate fee for this order
+    estimated_fee = get_estimated_order_fee(pair, order_type, volume)
+    # Check if API keys are present; if not, skip validation and simulate order
+    if not k.key or not k.secret:
+        logger.warning("Kraken API keys not configured. Skipping order validation.")
+        print(f"[Simulation] Kraken API keys not configured. Skipping order validation.")
+        # Simulate immediate fill for market orders in paper trading
+        return {
+            'descr': f"{order_type} {volume} {pair} @ market (no validation)",
+            'status': 'filled',
+            'filled_volume': volume,
+            'remaining_volume': 0.0,
+            'fee': estimated_fee if estimated_fee is not None else GENERAL_CONFIG["trade_fee"]
+        }
     # Check minimum volume
-    min_vol = MIN_VOLUME.get(pair, 0)
+    min_vol = get_min_volume(pair)
     if volume < min_vol:
         logger.warning(f"Volume {volume} is less than the minimum allowed ({min_vol}) for {pair}.")
         print(f"[Simulation] Volume {volume} is less than the minimum allowed ({min_vol}) for {pair}.")
@@ -228,7 +315,7 @@ def simulate_order(order_type, pair, volume, price=None, validate=True):
     if price is not None:
         order['price'] = str(price)
     try:
-        resp = k.query_private('AddOrder', order)
+        resp = query_private_throttled('AddOrder', order)
         if resp.get('error'):
             logger.warning(f"Kraken AddOrder error: {resp['error']}")
             print(f"[Simulation] Kraken AddOrder error: {resp['error']}")
@@ -236,11 +323,63 @@ def simulate_order(order_type, pair, volume, price=None, validate=True):
         descr = resp.get('result', {}).get('descr', '')
         print(f"[Simulation] Order validated: {descr}")
         logger.info(f"Order simulation successful: {descr}")
+        # Simulate immediate fill for market orders in paper trading
+        if validate:
+            return {
+                'descr': descr,
+                'status': 'filled',
+                'filled_volume': volume,
+                'remaining_volume': 0.0,
+                'fee': estimated_fee if estimated_fee is not None else GENERAL_CONFIG["trade_fee"]
+            }
+        # In real trading, you should use QueryOrders to check the actual order status.
+        # Example:
+        # order_id = resp['result'].get('txid', [None])[0]
+        # if order_id:
+        #     order_status_resp = query_private_throttled('QueryOrders', {'txid': order_id})
+        #     # order_status_resp['result'][order_id] contains status, filled volume, remaining volume, etc.
+        #     # Example of handling partial fill:
+        #     # status = order_status_resp['result'][order_id]['status']
+        #     # filled = float(order_status_resp['result'][order_id]['vol_exec'])
+        #     # remaining = float(order_status_resp['result'][order_id]['vol']) - filled
+        #     # return {
+        #     #     'descr': descr,
+        #     #     'status': status,
+        #     #     'filled_volume': filled,
+        #     #     'remaining_volume': remaining,
+        #     #     'fee': ... # extract fee if available
+        #     # }
         return resp['result']
     except Exception as e:
         logger.error(f"Exception in simulate_order: {e}")
         print(f"[Simulation] Error in simulate_order: {e}")
         return None
+
+def get_dynamic_trade_fee():
+    """
+    Query the real fee of the Kraken account using the TradeBalance endpoint.
+    If there are no API keys, return None.
+    """
+    if not k.key or not k.secret:
+        return None
+    try:
+        resp = query_private_throttled('TradeBalance')
+        if resp.get('error'):
+            logger.warning(f"Kraken TradeBalance error: {resp['error']}")
+            return None
+        fee = resp.get('result', {}).get('fee')
+        if fee is not None:
+            return float(fee)
+    except Exception as e:
+        logger.error(f"Error querying dynamic fee: {e}")
+    return None
+
+def get_min_volume(pair):
+    resp = query_public_throttled('AssetPairs', {'pair': pair})
+    if resp['error']:
+        logger.warning(f"Failed to fetch min volume for {pair}: {resp['error']}")
+        return 0
+    return float(resp['result'][pair]['ordermin'])
 
 # Clear console
 def clear_console():
@@ -291,6 +430,10 @@ def main():
     try:
         while True:
             cycle += 1
+            # Update trade_fee dynamically if possible
+            dynamic_fee = get_dynamic_trade_fee()
+            if dynamic_fee is not None:
+                trade_fee = dynamic_fee
             # Update parquet with new 60min candles
             try:
                 update_parquet()
@@ -357,16 +500,15 @@ def main():
                 invest_amount = balance * investment_fraction
                 if invest_amount >= 1e-8 and balance > 0:
                     volume = invest_amount / auto_price
-                    # Validate order with Kraken (simulation)
-                    order_result = simulate_order('buy', PAIR, volume, price=None, validate=True)
+                    # Use limit order at auto_price
+                    order_result = simulate_order('buy', PAIR, volume, price=auto_price, validate=True)
                     if order_result:
                         balance -= invest_amount
-                        # Use datetime.utcnow() if using realtime price, else last_candle time
                         if auto_price == last_candle['Close']:
                             entry_time = last_candle.name.to_pydatetime() if hasattr(last_candle.name, 'to_pydatetime') else last_candle.name
                         else:
                             entry_time = datetime.utcnow()
-                        save_trade('buy', auto_price, volume, 0, balance, source='auto')
+                        save_trade('buy', auto_price, volume, 0, balance, fee=order_result.get('fee', trade_fee), source='auto')
                         position = {
                             'entry_price': auto_price,
                             'volume': volume,
@@ -383,16 +525,62 @@ def main():
                 auto_price = get_realtime_price(PAIR) or last_candle['Close']
                 pl = (auto_price - position['entry_price']) * position['volume']
                 pl -= (position['entry_price'] + auto_price) * position['volume'] * trade_fee
-                # Validate order with Kraken (simulation)
-                order_result = simulate_order('sell', PAIR, position['volume'], price=None, validate=True)
+                # Use limit order at auto_price
+                order_result = simulate_order('sell', PAIR, position['volume'], price=auto_price, validate=True)
                 if order_result:
                     balance += (auto_price * position['volume']) + pl
-                    save_trade('sell', auto_price, position['volume'], pl, balance, source='auto')
+                    save_trade('sell', auto_price, position['volume'], pl, balance, fee=order_result.get('fee', trade_fee), source='auto')
                     print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Auto SELL: {position['volume']:.6f} BTC @ ${auto_price:,.2f} | P/L: ${pl:,.2f}")
                     position = None
                 else:
                     print(f"[AUTO] Sell order not validated. Trade not executed.")
                     logger.warning("[AUTO] Sell order not validated. Trade not executed.")
+
+            # --- HÍBRIDO: TIMEOUT Y RESPALDO A ORDEN DE MERCADO EN AUTO ---
+            # Solo aplica para auto-trading (no manual)
+            # Si hubo acción auto (buy/sell) pero la orden límite no se ejecutó, intenta respaldo a mercado
+            if auto_action in ['buy', 'sell'] and (order_result is None):
+                print(f"[AUTO] Orden límite no ejecutada. Esperando timeout para respaldo a mercado...")
+                logger.warning(f"[AUTO] Orden límite no ejecutada. Esperando timeout para respaldo a mercado...")
+                timeout_seconds = 120  # 2 minutos
+                time.sleep(timeout_seconds)
+                # Intentar orden de mercado (sin precio)
+                print(f"[AUTO] Intentando orden de mercado de respaldo...")
+                logger.info(f"[AUTO] Intentando orden de mercado de respaldo...")
+                if auto_action == 'buy':
+                    market_price = get_realtime_price(PAIR) or last_candle['Close']
+                    invest_amount = balance * investment_fraction
+                    if invest_amount >= 1e-8 and balance > 0:
+                        volume = invest_amount / market_price
+                        market_order = simulate_order('buy', PAIR, volume, price=None, validate=True)
+                        if market_order:
+                            balance -= invest_amount
+                            entry_time = datetime.utcnow()
+                            save_trade('buy', market_price, volume, 0, balance, fee=market_order.get('fee', trade_fee), source='auto')
+                            position = {
+                                'entry_price': market_price,
+                                'volume': volume,
+                                'entry_time': entry_time
+                            }
+                            print(f"[AUTO] Orden de mercado ejecutada: {volume:.6f} BTC @ ${market_price:,.2f}")
+                            logger.info(f"[AUTO] Orden de mercado ejecutada: {volume:.6f} BTC @ ${market_price:,.2f}")
+                        else:
+                            print(f"[AUTO] Orden de mercado de respaldo fallida.")
+                            logger.warning(f"[AUTO] Orden de mercado de respaldo fallida.")
+                elif auto_action == 'sell' and position:
+                    market_price = get_realtime_price(PAIR) or last_candle['Close']
+                    pl = (market_price - position['entry_price']) * position['volume']
+                    pl -= (position['entry_price'] + market_price) * position['volume'] * trade_fee
+                    market_order = simulate_order('sell', PAIR, position['volume'], price=None, validate=True)
+                    if market_order:
+                        balance += (market_price * position['volume']) + pl
+                        save_trade('sell', market_price, position['volume'], pl, balance, fee=market_order.get('fee', trade_fee), source='auto')
+                        print(f"[AUTO] Orden de mercado ejecutada: {position['volume']:.6f} BTC @ ${market_price:,.2f} | P/L: ${pl:,.2f}")
+                        logger.info(f"[AUTO] Orden de mercado ejecutada: {position['volume']:.6f} BTC @ ${market_price:,.2f} | P/L: ${pl:,.2f}")
+                        position = None
+                    else:
+                        print(f"[AUTO] Orden de mercado de respaldo fallida.")
+                        logger.warning(f"[AUTO] Orden de mercado de respaldo fallida.")
 
             # Always show available commands and get user input
             print("Available commands:")
@@ -418,11 +606,12 @@ def main():
                         print("Investment amount too small to execute a trade.")
                     else:
                         volume = invest_amount / realtime_price
-                        # Validate order with Kraken (simulation)
-                        order_result = simulate_order('buy', PAIR, volume, price=None, validate=True)
+                        # Use limit order at realtime_price
+                        order_result = simulate_order('buy', PAIR, volume, price=realtime_price, validate=True)
                         if order_result:
                             balance -= invest_amount
-                            save_trade('buy', realtime_price, volume, 0, balance, source='manual')
+                            fee_real = realtime_price * volume * trade_fee
+                            save_trade('buy', realtime_price, volume, 0, balance, fee=fee_real, source='manual')
                             position = {
                                 'entry_price': realtime_price,
                                 'volume': volume,
@@ -430,6 +619,9 @@ def main():
                             }
                             print(f"Simulated BUY: {volume:.6f} BTC @ ${realtime_price:,.2f}")
                             logger.info(f"Simulated BUY: {volume:.6f} BTC @ ${realtime_price:,.2f}")
+                            # Short delay and immediate next cycle
+                            time.sleep(4)
+                            continue
                         else:
                             print("[MANUAL] Buy order not validated. Trade not executed.")
                             logger.warning("[MANUAL] Buy order not validated. Trade not executed.")
@@ -440,21 +632,31 @@ def main():
                 else:
                     pl = (realtime_price - position['entry_price']) * position['volume']
                     pl -= (position['entry_price'] + realtime_price) * position['volume'] * trade_fee
-                    # Validate order with Kraken (simulation)
-                    order_result = simulate_order('sell', PAIR, position['volume'], price=None, validate=True)
+                    # Use limit order at realtime_price
+                    order_result = simulate_order('sell', PAIR, position['volume'], price=realtime_price, validate=True)
                     if order_result:
                         balance += (realtime_price * position['volume']) + pl
-                        save_trade('sell', realtime_price, position['volume'], pl, balance, source='manual')
+                        fee_real = realtime_price * position['volume'] * trade_fee
+                        save_trade('sell', realtime_price, position['volume'], pl, balance, fee=fee_real, source='manual')
                         print(f"Simulated SELL: {position['volume']:.6f} BTC @ ${realtime_price:,.2f} | P/L: ${pl:,.2f}")
                         logger.info(f"Simulated SELL: {position['volume']:.6f} BTC @ ${realtime_price:,.2f} | P/L: ${pl:,.2f}")
                         position = None
+                        # Short delay and immediate next cycle
+                        time.sleep(4)
+                        continue
                     else:
                         print("[MANUAL] Sell order not validated. Trade not executed.")
                         logger.warning("[MANUAL] Sell order not validated. Trade not executed.")
             elif user_input == 'b' and position:
                 print("You already have an open position. Close it before buying again.")
+                # Short delay and immediate next cycle
+                time.sleep(4)
+                continue
             elif user_input == 's' and not position:
                 print("No open position to sell.")
+                # Short delay and immediate next cycle
+                time.sleep(4)
+                continue
             # else: just continue
 
             # If user_input was empty (timeout), just continue to next cycle
