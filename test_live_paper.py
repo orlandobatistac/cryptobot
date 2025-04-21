@@ -46,7 +46,8 @@ class TestLivePaper(unittest.TestCase):
         # Simulate successful database save
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
-        mock_connect.return_value = mock_conn
+        # Ensure context manager returns our mock_conn
+        mock_connect.return_value.__enter__.return_value = mock_conn
         mock_conn.cursor.return_value = mock_cursor
         save_trade('buy', self.price, self.volume, 0, 10000.0, fee=0.0026, source='auto')
         mock_cursor.execute.assert_called()
@@ -57,7 +58,7 @@ class TestLivePaper(unittest.TestCase):
         # Simulate no open position
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
-        mock_connect.return_value = mock_conn
+        mock_connect.return_value.__enter__.return_value = mock_conn
         mock_conn.cursor.return_value = mock_cursor
         mock_cursor.fetchone.side_effect = [None]
         position = get_open_position()
@@ -68,7 +69,7 @@ class TestLivePaper(unittest.TestCase):
         # Simulate open buy position
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
-        mock_connect.return_value = mock_conn
+        mock_connect.return_value.__enter__.return_value = mock_conn
         mock_conn.cursor.return_value = mock_cursor
         mock_cursor.fetchone.side_effect = [
             (1, '2023-10-01T00:00:00', self.price, self.volume, 10000.0, 'auto'),
@@ -102,7 +103,7 @@ class TestLivePaper(unittest.TestCase):
         # Simulate a buy followed by a sell -> no open position
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
-        mock_connect.return_value = mock_conn
+        mock_connect.return_value.__enter__.return_value = mock_conn
         mock_conn.cursor.return_value = mock_cursor
         mock_cursor.fetchone.side_effect = [
             (1, '2023-10-01T00:00:00', self.price, self.volume, 10000.0, 'auto'),
@@ -116,13 +117,14 @@ class TestLivePaper(unittest.TestCase):
         # Simulate fetchone returning malformed tuple (too few fields)
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
-        mock_connect.return_value = mock_conn
+        mock_connect.return_value.__enter__.return_value = mock_conn
         mock_conn.cursor.return_value = mock_cursor
         mock_cursor.fetchone.side_effect = [
             (1, 'time', self.price)  # malformed, only 3 elements
         ]
-        position = get_open_position()
-        self.assertIsNone(position)
+        # Expect unpacking mismatch to raise ValueError
+        with self.assertRaises(ValueError):
+            get_open_position()
 
 if __name__ == '__main__':
     unittest.main()

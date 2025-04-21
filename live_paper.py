@@ -276,15 +276,17 @@ def save_trade(trade_type, price, volume, profit, balance, fee=0, source='manual
         Exception: For unexpected errors.
     """
     try:
-        # Ensure thread-safety when writing to the database
-        with DB_LOCK:
-            conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+        with DB_LOCK, sqlite3.connect(DB_FILE, check_same_thread=False) as conn:
             c = conn.cursor()
-            c.execute("INSERT INTO trades (timestamp, type, price, volume, profit, balance, fee, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                      (datetime.utcnow().isoformat(), trade_type, price, volume, profit, balance, fee, source))
+            c.execute(
+                "INSERT INTO trades (timestamp, type, price, volume, profit, balance, fee, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (datetime.utcnow().isoformat(), trade_type, price, volume, profit, balance, fee, source)
+            )
             conn.commit()
-            conn.close()
-            logger.info(f"Trade saved: {trade_type} {volume} @ {price}, profit: {profit}, balance: {balance}, fee: {fee}, source: {source}")
+            logger.info(
+                f"Trade saved: {trade_type} {volume} @ {price}, profit: {profit}, balance: {balance}, fee: {fee}, source: {source}"
+            )
     except Exception as e:
         logger.error(f"Exception in save_trade: {e}")
         raise
@@ -301,43 +303,36 @@ def get_open_position():
     Raises:
         sqlite3.OperationalError: On DB operational errors.
         sqlite3.DatabaseError: On other DB errors.
-        Exception: For unexpected errors.
     """
-    try:
-        # Ensure thread-safety when reading from the database
-        with DB_LOCK:
-            conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-            c = conn.cursor()
-            c.execute('''SELECT id, timestamp, price, volume, balance, source
-                         FROM trades
-                         WHERE type = 'buy'
-                         ORDER BY id DESC LIMIT 1''')
-            last_buy = c.fetchone()
-            if not last_buy:
-                conn.close()
-                return None
-            try:
-                buy_id, buy_time, buy_price, buy_volume, buy_balance, buy_source = last_buy
-            except ValueError:
-                conn.close()
-                return None
-            c.execute('''SELECT id FROM trades
-                         WHERE type = 'sell' AND id > ?
-                         ORDER BY id ASC LIMIT 1''', (buy_id,))
-            has_sell = c.fetchone()
-            conn.close()
-            if not has_sell:
-                logger.info(f"Open position found: entry {buy_price}, volume {buy_volume}, source {buy_source}")
-                return {
-                    "entry_price": buy_price,
-                    "volume": buy_volume,
-                    "entry_time": pd.to_datetime(buy_time),
-                    "source": buy_source
-                }
+    with DB_LOCK, sqlite3.connect(DB_FILE, check_same_thread=False) as conn:
+        c = conn.cursor()
+        c.execute(
+            '''SELECT id, timestamp, price, volume, balance, source
+               FROM trades
+               WHERE type = 'buy'
+               ORDER BY id DESC LIMIT 1'''
+        )
+        last_buy = c.fetchone()
+        if not last_buy:
             return None
-    except Exception as e:
-        logger.error(f"Exception in get_open_position: {e}")
-        raise
+        buy_id, buy_time, buy_price, buy_volume, buy_balance, buy_source = last_buy
+        c.execute(
+            '''SELECT id FROM trades
+               WHERE type = 'sell' AND id > ?
+               ORDER BY id ASC LIMIT 1''',
+            (buy_id,)
+        )
+        if not c.fetchone():
+            logger.info(
+                f"Open position found: entry {buy_price}, volume {buy_volume}, source {buy_source}"
+            )
+            return {
+                "entry_price": buy_price,
+                "volume": buy_volume,
+                "entry_time": pd.to_datetime(buy_time),
+                "source": buy_source
+            }
+        return None
 
 def update_parquet():
     """
@@ -638,16 +633,11 @@ def main():
         KeyboardInterrupt: If the user stops the program with Ctrl+C.
     """
     setup_database()
-    with DB_LOCK:
-        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+    with DB_LOCK, sqlite3.connect(DB_FILE, check_same_thread=False) as conn:
         c = conn.cursor()
         c.execute('SELECT balance FROM trades ORDER BY id DESC LIMIT 1')
         last_balance = c.fetchone()
-        conn.close()
-    if last_balance:
-        balance = last_balance[0]
-    else:
-        balance = GENERAL_CONFIG["initial_capital"]
+    balance = last_balance[0] if last_balance else GENERAL_CONFIG["initial_capital"]
     trade_fee = GENERAL_CONFIG["trade_fee"]
     investment_fraction = GENERAL_CONFIG["investment_fraction"]
     strategy = Strategy()
