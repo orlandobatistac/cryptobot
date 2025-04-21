@@ -151,6 +151,52 @@ The bot automatically evaluates the trading strategy at the close of each daily 
 
 ---
 
+## 📝 Paper Trading (Realistic Simulated Environment)
+
+To validate your strategy in a realistic environment, `live_paper.py` provides a paper trading loop: each day (at the close of the D1 candle) the bot evaluates your strategy and logs every trade to **paper_trades.db**.
+
+### 1. Setup
+
+- Make sure `config.json` contains your desired parameters.
+- Install dependencies:
+  ```bash
+  pip install -r requirements.txt
+  ```
+
+### 2. Running Paper Trading
+
+1. Run:
+   ```bash
+   python live_paper.py
+   ```
+2. The bot will display a table with status (cycle, time, price, open trade, P/L, equity or balance).
+3. Commands available during execution:
+   - `b` → buy at the current price (simulated).
+   - `s` → sell (close position).
+   - `q` → exit the bot.
+
+### 3. Trade Verification
+
+- Query the recorded trades in SQLite:
+  ```bash
+  sqlite3 paper_trades.db "SELECT timestamp, type, price, volume, profit, balance, source FROM trades;"
+  ```
+- Verify that:
+  - Each row has type `auto` or `manual`.
+  - The `timestamp` matches the on-screen table.
+  - No tiny negative values exist in `balance`.
+
+### 4. Reproducible Tests
+
+- **Replay vs Backtest:** Run `test_replay.py` to verify entry/exit signals match `results/backtest/.../trades.json`.
+- **DB Stability Test:** In parallel, run multiple cycles or threads simulating data reloads and buy/sell commands. Verify there are no database locks.
+
+---
+
+With this section, you can thoroughly test your bot in a simulated environment, confirm the correct recording of trades, and ensure system stability under production-like conditions.
+
+---
+
 ## 📌 Notes
 
 - This bot **does not connect to exchanges** (yet).
