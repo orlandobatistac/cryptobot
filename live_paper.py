@@ -289,7 +289,8 @@ def save_trade(trade_type, price, volume, profit, balance, fee=0, source='manual
             )
     except Exception as e:
         logger.error(f"Exception in save_trade: {e}")
-        raise
+        print(f"Warning: Failed to save trade to database: {e}. Continuing without saving.")
+        return
 
 @retry((sqlite3.OperationalError, sqlite3.DatabaseError), tries=3, delay=2, backoff=2, logger=logger)
 def get_open_position():
@@ -573,12 +574,17 @@ def print_session_summary():
 
     Prints total trades, total profit, and win rate.
     """
-    with DB_LOCK, sqlite3.connect(DB_FILE) as conn:
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*), COALESCE(SUM(profit),0) FROM trades")
-        total_trades, total_profit = c.fetchone()
-        c.execute("SELECT COUNT(*) FROM trades WHERE profit>0")
-        wins = c.fetchone()[0]
+    try:
+        with DB_LOCK, sqlite3.connect(DB_FILE) as conn:
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*), COALESCE(SUM(profit),0) FROM trades")
+            total_trades, total_profit = c.fetchone()
+            c.execute("SELECT COUNT(*) FROM trades WHERE profit>0")
+            wins = c.fetchone()[0]
+    except Exception as e:
+        logger.error(f"Exception in print_session_summary: {e}")
+        print(f"Warning: Failed to fetch session summary from database: {e}.")
+        return
     win_rate = (wins/total_trades*100) if total_trades else 0
     msg = f"Session summary → Trades: {total_trades}, P/L: ${total_profit:.2f}, Win Rate: {win_rate:.2f}%"
     print(msg); logger.info(msg)
