@@ -13,6 +13,16 @@ init(autoreset=True)
 load_dotenv()
 
 def round_financial(value, decimals=8):
+    """
+    Round a financial value to a specified number of decimal places.
+
+    Args:
+        value (float): Value to round.
+        decimals (int): Number of decimal places.
+
+    Returns:
+        float: Rounded value.
+    """
     rounded = round(value, decimals)
     return max(rounded, 0) if rounded < 1e-8 else rounded
 
@@ -20,9 +30,20 @@ BASE_DIR = os.path.dirname(__file__)
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 DB_FILE = os.path.join(BASE_DIR, "paper_trades.db")
 
-# Retry decorator for robustness
 def retry(ExceptionToCheck, tries=3, delay=2, backoff=2, logger=None):
-    """Decorator that retries retriable errors and aborts on non-retriable ones."""
+    """
+    Decorator to retry a function call on specified exceptions.
+
+    Args:
+        ExceptionToCheck (Exception or tuple): Exception(s) to catch for retry.
+        tries (int): Number of retry attempts.
+        delay (float): Initial delay between retries in seconds.
+        backoff (float): Multiplier applied to delay on each retry.
+        logger (logging.Logger, optional): Logger for warnings and errors.
+
+    Returns:
+        function: A decorator that wraps the target function with retry logic.
+    """
     def deco_retry(f):
         @functools.wraps(f)
         def f_retry(*args, **kwargs):
@@ -58,8 +79,17 @@ def retry(ExceptionToCheck, tries=3, delay=2, backoff=2, logger=None):
         return f_retry
     return deco_retry
 
-# Load configuration
 def load_config():
+    """
+    Load and parse the JSON configuration file.
+
+    Returns:
+        dict: Configuration data parsed from JSON.
+
+    Raises:
+        FileNotFoundError: If the config file does not exist.
+        json.JSONDecodeError: If the JSON is invalid.
+    """
     with open(CONFIG_PATH, "r") as f:
         return json.load(f)
 
@@ -67,26 +97,26 @@ CONFIG = load_config()
 STRATEGY_CONFIG = CONFIG["strategy"]
 GENERAL_CONFIG = CONFIG["general"]
 
-# Initialize Kraken connection
 k = krakenex.API()
 k.key = os.getenv('KRAKEN_API_KEY')
 k.secret = os.getenv('KRAKEN_API_SECRET')
 
-# Parameters
-PAIR = "XXBTZUSD"  # BTC/USD
-INTERVAL = 1  # minutes
+PAIR = "XXBTZUSD"
+INTERVAL = 1
 
-# Minimum volumes per pair (extend this dictionary as needed)
 MIN_VOLUME = {
-    'XXBTZUSD': 0.0001,  # 0.0001 BTC
-    # Add other pairs if needed
+    'XXBTZUSD': 0.0001,
 }
 
-# Initialize threading lock for database operations
 DB_LOCK = threading.Lock()
 
-# Initialize database
 def setup_database():
+    """
+    Initialize SQLite database and ensure the trades table exists, adding missing columns if needed.
+
+    Raises:
+        sqlite3.OperationalError: On database operation failure.
+    """
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS trades (
@@ -100,66 +130,110 @@ def setup_database():
         fee REAL DEFAULT 0,
         source TEXT DEFAULT 'manual'
     )''')
-    # Try to add the columns if upgrading an old DB
     try:
         c.execute("ALTER TABLE trades ADD COLUMN source TEXT DEFAULT 'manual'")
     except sqlite3.OperationalError:
-        pass  # Column already exists
+        pass
     try:
         c.execute("ALTER TABLE trades ADD COLUMN fee REAL DEFAULT 0")
     except sqlite3.OperationalError:
-        pass  # Column already exists
+        pass
     conn.commit()
     conn.close()
 
-RATE_LIMIT_THRESHOLD = 2  # You can adjust this value as needed
-RATE_LIMIT_SLEEP = 3     # Seconds to wait if threshold is reached
+RATE_LIMIT_THRESHOLD = 2
+RATE_LIMIT_SLEEP = 3
 
-# --- Local rate limit tracking ---
-RATE_LIMIT_POINTS = 15  # Kraken standard limit
-RATE_LIMIT_WINDOW = 3   # Time window in seconds
+RATE_LIMIT_POINTS = 15
+RATE_LIMIT_WINDOW = 3
 
-# Points per endpoint (based on experience/community)
 ENDPOINT_POINTS = {
-    'AddOrder': 2,  # Can be 2-4 according to docs, conservative
+    'AddOrder': 2,
     'CancelOrder': 1,
     'Ticker': 1,
     'OHLC': 1,
     'TradeBalance': 1,
     'AssetPairs': 1,
-    # Add other endpoints here if needed
 }
 
 api_call_times = deque()
 api_call_points = deque()
 
 def rate_limit_throttle(endpoint):
+    """
+    Throttle local API calls to respect Kraken's rate limits.
+
+    Args:
+        endpoint (str): Kraken API endpoint being called.
+    """
     now = time.time()
-    # Remove calls outside the window
     while api_call_times and now - api_call_times[0] > RATE_LIMIT_WINDOW:
         api_call_times.popleft()
         api_call_points.popleft()
-    # Calculate used points
     used_points = sum(api_call_points)
     endpoint_points = ENDPOINT_POINTS.get(endpoint, 1)
     if used_points + endpoint_points > RATE_LIMIT_POINTS:
         sleep_time = RATE_LIMIT_WINDOW - (now - api_call_times[0])
         logger.warning(f"Local rate limit: {used_points} points used. Pausing {sleep_time:.2f}s to avoid lockout.")
         time.sleep(max(sleep_time, 0.1))
-    # Register the call
     api_call_times.append(time.time())
     api_call_points.append(endpoint_points)
 
 def query_public_throttled(endpoint, *args, **kwargs):
+    """
+    Call Kraken public API with local rate limiting.
+
+    Args:
+        endpoint (str): Kraken public API endpoint.
+        *args: Positional arguments for API call.
+        **kwargs: Keyword arguments for API call.
+
+    Returns:
+        dict: Response from Kraken API.
+
+    Raises:
+        requests.ConnectionError: On connection failure.
+        requests.Timeout: On request timeout.
+    """
     rate_limit_throttle(endpoint)
     return k.query_public(endpoint, *args, **kwargs)
 
 def query_private_throttled(endpoint, *args, **kwargs):
+    """
+    Call Kraken private API with local rate limiting.
+
+    Args:
+        endpoint (str): Kraken private API endpoint.
+        *args: Positional arguments for API call.
+        **kwargs: Keyword arguments for API call.
+
+    Returns:
+        dict: Response from Kraken API.
+
+    Raises:
+        requests.ConnectionError: On connection failure.
+        requests.Timeout: On request timeout.
+    """
     rate_limit_throttle(endpoint)
     return k.query_private(endpoint, *args, **kwargs)
 
 @retry((requests.ConnectionError, requests.Timeout), tries=3, delay=2, backoff=2, logger=logger)
 def get_latest_candle(pair, interval):
+    """
+    Fetch the latest OHLC candle for a trading pair.
+
+    Args:
+        pair (str): Asset pair code (e.g. 'XXBTZUSD').
+        interval (int): Candle interval in minutes.
+
+    Returns:
+        pandas.DataFrame: DataFrame with one row representing the latest candle.
+
+    Raises:
+        requests.ConnectionError: If API call fails.
+        requests.Timeout: If API call times out.
+        Exception: For other unexpected errors.
+    """
     try:
         resp = query_public_throttled('OHLC', {'pair': pair, 'interval': interval})
         if resp["error"]:
@@ -169,7 +243,6 @@ def get_latest_candle(pair, interval):
         df = pd.DataFrame(ohlc, columns=["time", "open", "high", "low", "close", "vwap", "volume", "count"])
         df["time"] = pd.to_datetime(df["time"], unit="s")
         df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
-        # Rename columns to uppercase for Strategy compatibility
         df = df.rename(columns={
             "open": "Open",
             "high": "High",
@@ -183,49 +256,96 @@ def get_latest_candle(pair, interval):
         logger.error(f"Exception in get_latest_candle: {e}")
         raise
 
-@retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
+@retry((sqlite3.OperationalError, sqlite3.DatabaseError), tries=3, delay=2, backoff=2, logger=logger)
 def save_trade(trade_type, price, volume, profit, balance, fee=0, source='manual'):
-    # Usar context manager para liberar conexión automáticamente
+    """
+    Save a trade record into the SQLite database.
+
+    Args:
+        trade_type (str): 'buy' or 'sell'.
+        price (float): Execution price of the trade.
+        volume (float): Traded volume.
+        profit (float): Profit from the trade.
+        balance (float): Account balance after trade.
+        fee (float, optional): Commission fee. Defaults to 0.
+        source (str, optional): 'manual' or 'auto'. Defaults to 'manual'.
+
+    Raises:
+        sqlite3.OperationalError: On DB operational errors.
+        sqlite3.DatabaseError: On other DB errors.
+        Exception: For unexpected errors.
+    """
     try:
-        with DB_LOCK, sqlite3.connect(DB_FILE, check_same_thread=False) as conn:
+        # Ensure thread-safety when writing to the database
+        with DB_LOCK:
+            conn = sqlite3.connect(DB_FILE, check_same_thread=False)
             c = conn.cursor()
             c.execute("INSERT INTO trades (timestamp, type, price, volume, profit, balance, fee, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                       (datetime.utcnow().isoformat(), trade_type, price, volume, profit, balance, fee, source))
             conn.commit()
+            conn.close()
             logger.info(f"Trade saved: {trade_type} {volume} @ {price}, profit: {profit}, balance: {balance}, fee: {fee}, source: {source}")
     except Exception as e:
         logger.error(f"Exception in save_trade: {e}")
         raise
 
-@retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
+@retry((sqlite3.OperationalError, sqlite3.DatabaseError), tries=3, delay=2, backoff=2, logger=logger)
 def get_open_position():
+    """
+    Retrieve the most recent open (buy) position without a closing sell.
+
+    Returns:
+        dict: Details of open position with keys 'entry_price', 'volume', 'entry_time', 'source'.
+        None: If no open position exists.
+
+    Raises:
+        sqlite3.OperationalError: On DB operational errors.
+        sqlite3.DatabaseError: On other DB errors.
+        Exception: For unexpected errors.
+    """
     try:
-        with DB_LOCK, sqlite3.connect(DB_FILE, check_same_thread=False) as conn:
+        # Ensure thread-safety when reading from the database
+        with DB_LOCK:
+            conn = sqlite3.connect(DB_FILE, check_same_thread=False)
             c = conn.cursor()
             c.execute('''SELECT id, timestamp, price, volume, balance, source
                          FROM trades
                          WHERE type = 'buy'
                          ORDER BY id DESC LIMIT 1''')
             last_buy = c.fetchone()
-            if last_buy:
+            if not last_buy:
+                conn.close()
+                return None
+            try:
                 buy_id, buy_time, buy_price, buy_volume, buy_balance, buy_source = last_buy
-                c.execute('''SELECT id FROM trades
-                             WHERE type = 'sell' AND id > ?
-                             ORDER BY id ASC LIMIT 1''', (buy_id,))
-                if not c.fetchone():
-                    logger.info(f"Open position found: entry {buy_price}, volume {buy_volume}, source {buy_source}")
-                    return {
-                        "entry_price": buy_price,
-                        "volume": buy_volume,
-                        "entry_time": pd.to_datetime(buy_time),
-                        "source": buy_source
-                    }
-        return None
+            except ValueError:
+                conn.close()
+                return None
+            c.execute('''SELECT id FROM trades
+                         WHERE type = 'sell' AND id > ?
+                         ORDER BY id ASC LIMIT 1''', (buy_id,))
+            has_sell = c.fetchone()
+            conn.close()
+            if not has_sell:
+                logger.info(f"Open position found: entry {buy_price}, volume {buy_volume}, source {buy_source}")
+                return {
+                    "entry_price": buy_price,
+                    "volume": buy_volume,
+                    "entry_time": pd.to_datetime(buy_time),
+                    "source": buy_source
+                }
+            return None
     except Exception as e:
         logger.error(f"Exception in get_open_position: {e}")
         raise
 
 def update_parquet():
+    """
+    Execute the data update script to refresh OHLC parquet files.
+
+    Raises:
+        subprocess.CalledProcessError: If the update script returns a non-zero exit code.
+    """
     update_script = os.path.join(BASE_DIR, "data", "update_data.py")
     if not os.path.isfile(update_script):
         logger.warning(f"update_data.py not found at {update_script}. Skipping price update.")
@@ -237,8 +357,22 @@ def update_parquet():
             "python", update_script
         ], check=True, stdout=devnull, stderr=devnull)
 
-@retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
+@retry((requests.ConnectionError, requests.Timeout), tries=3, delay=2, backoff=2, logger=logger)
 def get_realtime_price(pair):
+    """
+    Fetch the current market price for a given trading pair.
+
+    Args:
+        pair (str): Asset pair code (e.g. 'XXBTZUSD').
+
+    Returns:
+        float: Last traded price, or None on API error.
+
+    Raises:
+        requests.ConnectionError: If API call fails.
+        requests.Timeout: If API call times out.
+        Exception: For other unexpected errors.
+    """
     try:
         resp = query_public_throttled('Ticker', {'pair': pair})
         if resp["error"]:
@@ -246,15 +380,27 @@ def get_realtime_price(pair):
             return None
         ticker = resp["result"][list(resp["result"].keys())[0]]
         logger.info(f"Fetched real-time price: {ticker['c'][0]}")
-        return float(ticker["c"][0])  # 'c' is the closing price (last trade)
+        return float(ticker["c"][0])
     except Exception as e:
         logger.error(f"Exception in get_realtime_price: {e}")
         raise
 
 def get_estimated_order_fee(pair, ordertype, volume):
     """
-    Estimate the fee for a specific order using the Fee endpoint.
-    Returns the fee rate (as a float, e.g., 0.0026 for 0.26%) or None if unavailable.
+    Estimate the commission fee for an order using Kraken's Fee endpoint.
+
+    Args:
+        pair (str): Asset pair code.
+        ordertype (str): 'buy' or 'sell'.
+        volume (float): Order volume.
+
+    Returns:
+        float: Fee fraction (e.g. 0.0026) or None if not available.
+
+    Raises:
+        requests.ConnectionError: On connection failure.
+        requests.Timeout: On request timeout.
+        Exception: For other unexpected errors.
     """
     if not k.key or not k.secret:
         return None
@@ -263,32 +409,37 @@ def get_estimated_order_fee(pair, ordertype, volume):
         if resp.get('error'):
             logger.warning(f"Kraken Fee endpoint error: {resp['error']}")
             return None
-        # The fee is usually in resp['result']['fee'] as a percentage (e.g., 0.26)
         fee_percent = resp.get('result', {}).get('fee')
         if fee_percent is not None:
-            return float(fee_percent) / 100.0  # Convert percent to fraction
+            return float(fee_percent) / 100.0
     except Exception as e:
         logger.error(f"Error querying order fee: {e}")
     return None
 
-@retry(Exception, tries=3, delay=2, backoff=2, logger=logger)
+@retry((requests.ConnectionError, requests.Timeout), tries=3, delay=2, backoff=2, logger=logger)
 def simulate_order(order_type, pair, volume, price=None, validate=True):
     """
-    Simulate an order using Kraken's private API with validate=True.
-    order_type: 'buy' or 'sell'
-    pair: trading pair (e.g. 'XXBTZUSD')
-    volume: amount to trade
-    price: limit price (None for market)
-    validate: True for simulation (paper), False for real
-    Returns a dict with simulated order status and details.
+    Simulate a paper-trading order via Kraken's API in validation mode.
+
+    Args:
+        order_type (str): 'buy' or 'sell'.
+        pair (str): Asset pair (e.g. 'XXBTZUSD').
+        volume (float): Order volume.
+        price (float, optional): Limit price; None for market orders.
+        validate (bool): If True, perform API validation; else return API response.
+
+    Returns:
+        dict or None: Simulation result with keys 'status', 'filled_volume', etc., or None on failure.
+
+    Raises:
+        requests.ConnectionError: On connection failure.
+        requests.Timeout: On request timeout.
+        Exception: For other unexpected errors.
     """
-    # Estimate fee for this order
     estimated_fee = get_estimated_order_fee(pair, order_type, volume)
-    # Check if API keys are present; if not, skip validation and simulate order
     if not k.key or not k.secret:
         logger.warning("Kraken API keys not configured. Skipping order validation.")
         print(f"[Simulation] Kraken API keys not configured. Skipping order validation.")
-        # Simulate immediate fill for market orders in paper trading
         return {
             'descr': f"{order_type} {volume} {pair} @ market (no validation)",
             'status': 'filled',
@@ -296,7 +447,6 @@ def simulate_order(order_type, pair, volume, price=None, validate=True):
             'remaining_volume': 0.0,
             'fee': estimated_fee if estimated_fee is not None else GENERAL_CONFIG["trade_fee"]
         }
-    # Check minimum volume
     min_vol = get_min_volume(pair)
     if volume < min_vol:
         logger.warning(f"Volume {volume} is less than the minimum allowed ({min_vol}) for {pair}.")
@@ -320,7 +470,6 @@ def simulate_order(order_type, pair, volume, price=None, validate=True):
         descr = resp.get('result', {}).get('descr', '')
         print(f"[Simulation] Order validated: {descr}")
         logger.info(f"Order simulation successful: {descr}")
-        # Simulate immediate fill for market orders in paper trading
         if validate:
             return {
                 'descr': descr,
@@ -337,8 +486,15 @@ def simulate_order(order_type, pair, volume, price=None, validate=True):
 
 def get_dynamic_trade_fee():
     """
-    Query the real fee of the Kraken account using the TradeBalance endpoint.
-    If there are no API keys, return None.
+    Query the actual trading fee rate via Kraken's TradeBalance endpoint.
+
+    Returns:
+        float: Fee amount or None if unavailable or no API keys.
+
+    Raises:
+        requests.ConnectionError: On connection failure.
+        requests.Timeout: On request timeout.
+        Exception: For other unexpected errors.
     """
     if not k.key or not k.secret:
         return None
@@ -355,17 +511,43 @@ def get_dynamic_trade_fee():
     return None
 
 def get_min_volume(pair):
+    """
+    Retrieve the minimum order volume for a given trading pair.
+
+    Args:
+        pair (str): Asset pair code.
+
+    Returns:
+        float: Minimum allowed order volume, or 0 on error.
+
+    Raises:
+        requests.ConnectionError: On connection failure.
+        requests.Timeout: On request timeout.
+        Exception: For other unexpected errors.
+    """
     resp = query_public_throttled('AssetPairs', {'pair': pair})
     if resp['error']:
         logger.warning(f"Failed to fetch min volume for {pair}: {resp['error']}")
         return 0
     return float(resp['result'][pair]['ordermin'])
 
-# Clear console
 def clear_console():
+    """
+    Clear the terminal screen based on the operating system.
+    """
     os.system('cls' if os.name == 'nt' else 'clear')
 
 def input_with_timeout(prompt, timeout):
+    """
+    Prompt the user for input with a timeout.
+
+    Args:
+        prompt (str): Prompt message displayed to the user.
+        timeout (int or float): Seconds to wait for input.
+
+    Returns:
+        str: User input or empty string on timeout or interruption.
+    """
     try:
         return inputimeout(prompt=prompt, timeout=timeout)
     except TimeoutOccurred:
@@ -373,19 +555,29 @@ def input_with_timeout(prompt, timeout):
     except (EOFError, KeyboardInterrupt):
         return ''
 
-# --- Signals y flag de ejecución ---
 RUNNING = True
 def _signal_handler(sig, frame):
+    """
+    Handle OS signals to gracefully stop the trading loop.
+
+    Args:
+        sig (int): Signal number received.
+        frame: Current stack frame.
+    """
     global RUNNING
-    print("\nDetenido por señal de salida.\n")
-    logger.info("Se recibió señal de salida, deteniendo bot.")
+    print("\nStopped by exit signal.\n")
+    logger.info("Exit signal received, stopping bot.")
     RUNNING = False
 
 signal.signal(signal.SIGINT, _signal_handler)
 signal.signal(signal.SIGTERM, _signal_handler)
 
 def print_session_summary():
-    """Al finalizar muestra resumen de trades."""
+    """
+    Display a summary of trades and profit at session end.
+
+    Prints total trades, total profit, and win rate.
+    """
     with DB_LOCK, sqlite3.connect(DB_FILE) as conn:
         c = conn.cursor()
         c.execute("SELECT COUNT(*), COALESCE(SUM(profit),0) FROM trades")
@@ -393,10 +585,20 @@ def print_session_summary():
         c.execute("SELECT COUNT(*) FROM trades WHERE profit>0")
         wins = c.fetchone()[0]
     win_rate = (wins/total_trades*100) if total_trades else 0
-    msg = f"Resumen sesión → Trades: {total_trades}, P/L: ${total_profit:.2f}, Win Rate: {win_rate:.2f}%"
+    msg = f"Session summary → Trades: {total_trades}, P/L: ${total_profit:.2f}, Win Rate: {win_rate:.2f}%"
     print(msg); logger.info(msg)
 
 def print_trade_status(cycle, position, balance, realtime_price, trade_fee):
+    """
+    Print the current trade status, including cycle, price, P/L, and equity.
+
+    Args:
+        cycle (int): Current cycle number.
+        position (dict or None): Current open position details.
+        balance (float): Current account balance.
+        realtime_price (float or None): Latest market price.
+        trade_fee (float): Current trade fee fraction.
+    """
     now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
     headers = [f"{Fore.YELLOW}Field{Style.RESET_ALL}", f"{Fore.YELLOW}Value{Style.RESET_ALL}"]
     table = [
@@ -428,10 +630,14 @@ def print_trade_status(cycle, position, balance, realtime_price, trade_fee):
     print(tabulate(table, headers, tablefmt="plain"))
     print(f"{Fore.CYAN}{'='*40}{Style.RESET_ALL}\n")
 
-# Main paper trading loop
 def main():
+    """
+    Main paper trading loop: initializes database, loads data, evaluates strategy, and handles user input.
+
+    Raises:
+        KeyboardInterrupt: If the user stops the program with Ctrl+C.
+    """
     setup_database()
-    # Query last balance from DB (thread-safe)
     with DB_LOCK:
         conn = sqlite3.connect(DB_FILE, check_same_thread=False)
         c = conn.cursor()
@@ -445,7 +651,6 @@ def main():
     trade_fee = GENERAL_CONFIG["trade_fee"]
     investment_fraction = GENERAL_CONFIG["investment_fraction"]
     strategy = Strategy()
-    # Retrieve open position if exists
     position = get_open_position()
     initial_summary = []
     if position:
@@ -465,17 +670,14 @@ def main():
     try:
         while RUNNING:
             cycle += 1
-            # Update trade_fee dynamically if possible
             dynamic_fee = get_dynamic_trade_fee()
             if dynamic_fee is not None:
                 trade_fee = dynamic_fee
-            # Update parquet with new 60min candles
             try:
                 update_parquet()
             except Exception as e:
-                logger.error(f"Error actualizando datos parquet: {e}")
-                print(f"Warning: fallo al actualizar datos, se omite ciclo.")
-            # Load parquet and resample to D1 (or config.json interval)
+                logger.error(f"Error updating parquet data: {e}")
+                print("Warning: failed to update data, skipping cycle.")
             try:
                 df = pd.read_parquet(os.path.join(BASE_DIR, "data", "ohlc_data_60min_all_years.parquet"))
                 df["Timestamp"] = pd.to_datetime(df["Timestamp"])
@@ -489,27 +691,31 @@ def main():
                     'Volume': 'sum'
                 }).dropna()
             except Exception as e:
-                logger.error(f"Error cargando parquet: {e}")
+                logger.error(f"Error loading parquet data: {e}")
+                print("Warning: error loading parquet data, skipping cycle.")
                 time.sleep(INTERVAL * 60)
                 continue
 
             clear_console()
             for line in initial_summary:
                 print(line)
-            # Ensure user_input is always defined
             user_input = ''
-            print_trade_status(cycle, position, balance, get_realtime_price(PAIR), trade_fee)
+            try:
+                realtime_price = get_realtime_price(PAIR)
+            except Exception as e:
+                realtime_price = None
+                print(f"{Fore.RED}Warning: Unable to fetch real-time price. Continuing without it.{Style.RESET_ALL}")
+                logger.warning(f"get_realtime_price failed: {e}")
+            print_trade_status(cycle, position, balance, realtime_price, trade_fee)
 
-            # --- AUTO STRATEGY EVALUATION ---
             print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Evaluating strategy...\n")
             strategy.calculate_indicators(df_resampled)
             last_candle = df_resampled.iloc[-1]
             auto_action = None
-            # Auto BUY
             if not position and strategy.entry_signal(last_candle, df_resampled):
                 auto_action = 'buy'
                 print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Entry signal detected.")
-                auto_price = last_candle['Close']  # Precio de cierre para consistencia
+                auto_price = last_candle['Close']
                 invest_amount = balance * investment_fraction
                 if invest_amount >= 1e-8 and balance > 0:
                     volume = invest_amount / auto_price
@@ -525,11 +731,10 @@ def main():
                         save_trade('buy', auto_price, volume, 0, balance, fee=order_result.get('fee', trade_fee), source='auto')
                         position = {'entry_price': auto_price, 'volume': volume, 'entry_time': last_candle.name, 'source': 'auto'}
                         print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} BUY: {volume:.6f} BTC @ ${auto_price:.2f}")
-            # Auto SELL
             elif position and strategy.exit_signal(last_candle, df_resampled):
                 auto_action = 'sell'
                 print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Exit signal detected.")
-                auto_price = last_candle['Close']  # Precio de cierre para consistencia
+                auto_price = last_candle['Close']
                 pl = (auto_price - position['entry_price']) * position['volume']
                 pl -= (position['entry_price'] + auto_price) * position['volume'] * trade_fee
                 order_result = simulate_order('sell', PAIR, position['volume'], price=auto_price, validate=True)
@@ -543,20 +748,18 @@ def main():
                     save_trade('sell', auto_price, position['volume'], pl, balance, fee=order_result.get('fee', trade_fee), source='auto')
                     print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} SELL: {position['volume']:.6f} BTC @ ${auto_price:.2f} | P/L: ${pl:.2f}")
 
-            # Always show available commands and get user input
             print("Available commands:")
             print("[b] Buy at current price  ")
             print("[s] Sell (close position)  ")
             print("[q] Quit bot  \n")
             user_input = input_with_timeout("Press Enter after choosing an option: ", INTERVAL * 60).strip().lower()
-            print()  # Ensure a blank line after input for clarity
+            print()
 
             if user_input == 'q':
                 print("\nBot stopped by user (q).\n")
                 logger.info("Bot stopped by user (q).")
                 break
             elif user_input == 'b' and not position:
-                # Simulate buy
                 realtime_price = get_realtime_price(PAIR)
                 if not realtime_price:
                     print("Cannot buy: real-time price unavailable.")
@@ -564,11 +767,10 @@ def main():
                     print("Insufficient balance to buy.")
                 else:
                     invest_amount = balance * investment_fraction
-                    if invest_amount < 1e-8:  # Prevent extremely small trades
+                    if invest_amount < 1e-8:
                         print("Investment amount too small to execute a trade.")
                     else:
                         volume = invest_amount / realtime_price
-                        # Use limit order at realtime_price
                         order_result = simulate_order('buy', PAIR, volume, price=realtime_price, validate=True)
                         if order_result:
                             balance = round_financial(balance - invest_amount)
@@ -582,30 +784,26 @@ def main():
                             }
                             print(f"Simulated BUY: {volume:.6f} BTC @ ${realtime_price:,.2f}")
                             logger.info(f"Simulated BUY: {volume:.6f} BTC @ ${realtime_price:,.2f}")
-                            # Short delay and immediate next cycle
                             time.sleep(4)
                             continue
                         else:
                             print("[MANUAL] Buy order not validated. Trade not executed.")
                             logger.warning("[MANUAL] Buy order not validated. Trade not executed.")
             elif user_input == 's' and position:
-                # Simulate sell
                 realtime_price = get_realtime_price(PAIR)
                 if not realtime_price:
                     print("Cannot sell: real-time price unavailable.")
                 else:
                     pl = (realtime_price - position['entry_price']) * position['volume']
                     pl -= (position['entry_price'] + realtime_price) * position['volume'] * trade_fee
-                    # Use limit order at realtime_price
                     order_result = simulate_order('sell', PAIR, position['volume'], price=realtime_price, validate=True)
                     if order_result:
                         balance = round_financial(balance + (realtime_price * position['volume']) + pl)
                         fee_real = realtime_price * position['volume'] * trade_fee
                         save_trade('sell', realtime_price, position['volume'], pl, balance, fee=fee_real, source='manual')
-                        print(f"Simulated SELL: {position['volume']:.6f} BTC @ ${realtime_price:,.2f} | P/L: ${pl:,.2f}")
-                        logger.info(f"Simulated SELL: {position['volume']:.6f} BTC @ ${realtime_price:,.2f} | P/L: ${pl:,.2f}")
+                        print(f"Simulated SELL: {position['volume']:.6f} BTC @ ${realtime_price:,.2f} | P/L: ${pl:.2f}")
+                        logger.info(f"Simulated SELL: {position['volume']:.6f} BTC @ ${realtime_price:,.2f} | P/L: ${pl:.2f}")
                         position = None
-                        # Short delay and immediate next cycle
                         time.sleep(4)
                         continue
                     else:
@@ -613,18 +811,12 @@ def main():
                         logger.warning("[MANUAL] Sell order not validated. Trade not executed.")
             elif user_input == 'b' and position:
                 print("You already have an open position. Close it before buying again.")
-                # Short delay and immediate next cycle
                 time.sleep(4)
                 continue
             elif user_input == 's' and not position:
                 print("No open position to sell.")
-                # Short delay and immediate next cycle
                 time.sleep(4)
                 continue
-            # else: just continue
-
-            # If user_input was empty (timeout), just continue to next cycle
-            # Wait for the configured interval before next cycle
             time.sleep(INTERVAL * 60)
     except KeyboardInterrupt:
         print("\nBot manually stopped by user (Ctrl+C).\n")
