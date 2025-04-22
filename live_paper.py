@@ -112,13 +112,14 @@ DB_LOCK = threading.Lock()
 
 def setup_database():
     """
-    Initialize SQLite database and ensure the trades table exists, adding missing columns if needed.
+    Initialize SQLite database and ensure the trades and initial_balance tables exist.
 
     Raises:
         sqlite3.OperationalError: On database operation failure.
     """
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+    # Create trades table
     c.execute('''CREATE TABLE IF NOT EXISTS trades (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp TEXT,
@@ -130,6 +131,13 @@ def setup_database():
         fee REAL DEFAULT 0,
         source TEXT DEFAULT 'manual'
     )''')
+    # Create initial_balance table
+    c.execute('''CREATE TABLE IF NOT EXISTS initial_balance (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        balance REAL,
+        timestamp TEXT
+    )''')
+    # Add missing columns to trades
     try:
         c.execute("ALTER TABLE trades ADD COLUMN source TEXT DEFAULT 'manual'")
     except sqlite3.OperationalError:
@@ -138,6 +146,14 @@ def setup_database():
         c.execute("ALTER TABLE trades ADD COLUMN fee REAL DEFAULT 0")
     except sqlite3.OperationalError:
         pass
+    # Insert initial balance record if none exists
+    c.execute("SELECT balance FROM initial_balance ORDER BY id DESC LIMIT 1")
+    initial_record = c.fetchone()
+    if not initial_record:
+        c.execute(
+            "INSERT INTO initial_balance (balance, timestamp) VALUES (?, ?)",
+            (GENERAL_CONFIG["initial_capital"], datetime.utcnow().isoformat())
+        )
     conn.commit()
     conn.close()
 
@@ -589,7 +605,7 @@ def print_session_summary():
     msg = f"Session summary → Trades: {total_trades}, P/L: ${total_profit:.2f}, Win Rate: {win_rate:.2f}%"
     print(msg); logger.info(msg)
 
-def print_trade_status(cycle, position, balance, realtime_price, trade_fee):
+def print_trade_status(cycle, position, balance, realtime_price, trade_fee, session_start_time):
     """
     Print the current trade status, including cycle, price, P/L, and equity.
 
@@ -599,12 +615,18 @@ def print_trade_status(cycle, position, balance, realtime_price, trade_fee):
         balance (float): Current account balance.
         realtime_price (float or None): Latest market price.
         trade_fee (float): Current trade fee fraction.
+        session_start_time (datetime): Start time of the trading session.
     """
-    now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    now_dt = datetime.utcnow()
+    now_str = now_dt.strftime('%Y-%m-%d %H:%M:%S')
+    uptime = now_dt - session_start_time
+    uptime_str = str(uptime).split('.')[0]  # Format: days, HH:MM:SS
     headers = [f"{Fore.YELLOW}Field{Style.RESET_ALL}", f"{Fore.YELLOW}Value{Style.RESET_ALL}"]
     table = [
         ["Cycle", cycle],
-        ["Time", now + " UTC"],
+        ["Session Start", session_start_time.strftime('%Y-%m-%d %H:%M:%S') + " UTC"],
+        ["Uptime", uptime_str],
+        ["Time", now_str + " UTC"],
         ["BTCUSD Price", f"${realtime_price:,.2f}" if realtime_price else "N/A"]
     ]
     if position:
@@ -643,11 +665,17 @@ def main():
         c = conn.cursor()
         c.execute('SELECT balance FROM trades ORDER BY id DESC LIMIT 1')
         last_balance = c.fetchone()
-    balance = last_balance[0] if last_balance else GENERAL_CONFIG["initial_capital"]
+        if not last_balance:
+            c.execute('SELECT balance FROM initial_balance ORDER BY id DESC LIMIT 1')
+            record = c.fetchone()
+            balance = record[0] if record else GENERAL_CONFIG["initial_capital"]
+        else:
+            balance = last_balance[0]
     trade_fee = GENERAL_CONFIG["trade_fee"]
     investment_fraction = GENERAL_CONFIG["investment_fraction"]
     strategy = Strategy()
     position = get_open_position()
+    session_start_time = datetime.utcnow()
     initial_summary = []
     if position:
         initial_summary.append(f"Recovered open position: Entry price ${position['entry_price']:.2f}, Volume {position['volume']:.6f}")
@@ -702,7 +730,7 @@ def main():
                 realtime_price = None
                 print(f"{Fore.RED}Warning: Unable to fetch real-time price. Continuing without it.{Style.RESET_ALL}")
                 logger.warning(f"get_realtime_price failed: {e}")
-            print_trade_status(cycle, position, balance, realtime_price, trade_fee)
+            print_trade_status(cycle, position, balance, realtime_price, trade_fee, session_start_time)
 
             print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Evaluating strategy...\n")
             strategy.calculate_indicators(df_resampled)
