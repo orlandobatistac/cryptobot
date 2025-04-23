@@ -1,0 +1,28 @@
+{
+    "capital": {
+        "initial": 1000.0,
+        "final": 1000.0,
+        "total_profit": 0.0,
+        "pl_percent": 0.0
+    },
+    "trades": {
+        "number_of_trades": 0,
+        "win_rate": 0,
+        "avg_trade_duration_hours": 0,
+        "profit_factor": "inf",
+        "expectancy": 0
+    },
+    "fees": {
+        "total_fees": 0
+    },
+    "performance": {
+        "max_drawdown": 0,
+        "sharpe_ratio": 0,
+        "sortino_ratio": 0
+    },
+    "buy_and_hold": {
+        "final_capital": 1000.0,
+        "profit": 0.0,
+        "pl_percent": 0
+    }
+}

@@ -1,0 +1,46 @@
+{
+    "best_params": {
+        "sma_short": 30,
+        "sma_long": 187,
+        "rsi_period": 5,
+        "rsi_threshold": 88,
+        "macd_fast": 5,
+        "macd_slow": 47,
+        "macd_signal": 19,
+        "volume_sma_period": 34,
+        "atr_period": 27,
+        "adx_period": 11,
+        "adx_threshold": 45,
+        "bollinger_period": 23,
+        "bollinger_std_dev": 1.8328928763746295,
+        "supertrend_multiplier": 5.857624187432256,
+        "use_supertrend": true,
+        "macd_threshold": 6,
+        "stop_loss_atr_multiplier": 1.6635983566388803,
+        "use_adx_positive": false,
+        "use_macd_positive": false,
+        "trailing_stop_percentage": 0.08460707502632511,
+        "take_profit_multiplier": 15.84956907588022,
+        "stop_loss_multiplier": 0.7395536556822748,
+        "time_based_stop_days": 5,
+        "time_based_stop_loss_percent": -5.750393330761042,
+        "lateral_adx_threshold": 15,
+        "support_margin": 1.0330739705495342,
+        "resistance_margin": 0.9245818781170191
+    },
+    "metrics": {
+        "pl_percent": 271.78,
+        "sharpe_ratio": 4.14,
+        "max_drawdown": -1358.69
+    },
+    "data_used": {
+        "start_date": "2020-01-01",
+        "end_date": "2025-04-05",
+        "interval": "1D",
+        "initial_capital": 1000,
+        "trade_fee": 0.0026,
+        "spread": 0.00015,
+        "slippage": 0.0001,
+        "investment_fraction": 1.0
+    }
+}

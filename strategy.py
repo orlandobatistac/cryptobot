@@ -138,7 +138,7 @@ class Strategy:
             # Calculate Supertrend (used only if use_supertrend is True)
             atr = data['atr']
             hl2 = (data['High'] + data['Low']) / 2
-            data['supertrend_upper'] = hl2 + (self.config['supertrend_multiplier'] * atr)
+            data['supertrend_upper'] = hl2 + (self.config['supertrend_multiplier'] * atr)  # Corregido: '_mplier' a 'supertrend_multiplier'
             data['supertrend_lower'] = hl2 - (self.config['supertrend_multiplier'] * atr)
             data['supertrend'] = (data['Close'] > data['supertrend_lower']).astype(int)
 
@@ -165,17 +165,23 @@ class Strategy:
             raise
 
     @log_debug
-    def entry_signal(self, row, data):
+    def entry_signal(self, row, data, is_backtest=False):
         """
         Generate entry signal based on indicators.
         :param row: Current row of data (Series).
         :param data: Full DataFrame to access previous values.
+        :param is_backtest: Boolean indicating if called from backtest (iterates over all candles).
         :return: True if entry signal is triggered, False otherwise.
         """
         try:
             if row.get('entry_signal_generated', False) or self.position_open:
                 return False
             idx = row.name
+            if not is_backtest:
+                # For live trading, only evaluate the most recent candle
+                if idx != data.index[-1]:
+                    logger.warning(f"Attempted to evaluate outdated candle {idx}. Expected {data.index[-1]}")
+                    return False
             if idx not in data.index or data.index.get_loc(idx) < 1:
                 return False
             prev_idx_1 = data.index[data.index.get_loc(idx) - 1]
@@ -235,10 +241,22 @@ class Strategy:
             return False
 
     @log_debug
-    def exit_signal(self, row, data):
+    def exit_signal(self, row, data, is_backtest=False):
+        """
+        Generate exit signal based on indicators.
+        :param row: Current row of data (Series).
+        :param data: Full DataFrame to access previous values.
+        :param is_backtest: Boolean indicating if called from backtest (iterates over all candles).
+        :return: True if exit signal is triggered, False otherwise.
+        """
         try:
             if row.get('exit_signal_generated', False) or not self.position_open or self.last_entry_time == row.name:
                 return False
+            if not is_backtest:
+                # For live trading, only evaluate the most recent candle
+                if row.name != data.index[-1]:
+                    logger.warning(f"Attempted to evaluate outdated candle {row.name}. Expected {data.index[-1]}")
+                    return False
             self.highest_price = max(self.highest_price, row['Close'])
             trailing_stop = self.highest_price * (1 - self.config['trailing_stop_percentage'])
             stop_loss = self.entry_price - (self.config['stop_loss_atr_multiplier'] * row['atr'] * self.config['stop_loss_multiplier'])

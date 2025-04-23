@@ -246,8 +246,8 @@ if __name__ == "__main__":
                 print_status_with_progress("Step 5: Optimization", "FAILED", pbar)
                 exit(1)
 
-        logger.info("Step 6: Initializing strategy and calculating indicators.")
-        with tqdm(total=1, desc="Step 6: Strategy and Indicators", ncols=100, ascii=".-") as pbar:
+        logger.info("Step 6: Initializing strategy.")
+        with tqdm(total=1, desc="Step 6: Strategy", ncols=100, ascii=".-") as pbar:
             try:
                 if enable_optimization:
                     optimization_results_dir = config["optimization"]["optimization_results_dir"]
@@ -262,13 +262,10 @@ if __name__ == "__main__":
                         config["strategy"].update(best_params)
 
                 strategy = Strategy(config["strategy"])
-                strategy.calculate_indicators(data)
-                data.dropna(inplace=True)
-
-                print_status_with_progress("Step 6: Strategy and Indicators", "OK", pbar)
+                print_status_with_progress("Step 6: Strategy", "OK", pbar)
             except Exception as e:
                 logger.error(f"Step 6 failed: {e}", exc_info=True)
-                print_status_with_progress("Step 6: Strategy and Indicators", "FAILED", pbar)
+                print_status_with_progress("Step 6: Strategy", "FAILED", pbar)
                 exit(1)
 
         logger.info("Step 7: Initializing backtest.")

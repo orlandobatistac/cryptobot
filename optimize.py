@@ -95,11 +95,8 @@ def objective(trial):
             logger.error("Data is empty. Cannot proceed with trial.")
             return -9999  # Penalize empty data
 
-        # Calculate indicators
+        # Create strategy instance
         strategy = Strategy(config)
-        strategy.calculate_indicators(data)
-        if data.isnull().any().any():
-            logger.warning("Data contains NaN values after calculating indicators.")
 
         # Run backtest with the flag `from_optimize=True`
         backtester = Backtester(

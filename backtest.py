@@ -63,13 +63,19 @@ class Backtester:
             logger.error("Data is empty. Cannot run backtest.")
             raise ValueError("Data is empty. Cannot run backtest.")
 
+        # Calculate indicators before starting the backtest
+        self.strategy.calculate_indicators(self.data)
+        if self.data.empty:
+            logger.error("Data is empty after calculating indicators. Cannot run backtest.")
+            raise ValueError("Data is empty after calculating indicators. Cannot run backtest.")
+
         position = None
         for i, row in self.data.iterrows():
             logger.debug("Processing row at index: %s", row.name)
             try:
                 # Check for entry signal
                 if position is None:
-                    entry_signal = self.strategy.entry_signal(row, self.data)
+                    entry_signal = self.strategy.entry_signal(row, self.data, is_backtest=True)
                     if entry_signal:
                         logger.info("Entry signal detected at %s. Base price: %s", row.name, row['Close'])
                         self.trade_id += 1
@@ -88,7 +94,7 @@ class Backtester:
 
                 # Check for exit signal
                 if position:
-                    exit_signal = self.strategy.exit_signal(row, self.data)
+                    exit_signal = self.strategy.exit_signal(row, self.data, is_backtest=True)
                     if exit_signal:
                         logger.info("Exit signal detected at %s. Base price: %s", row.name, row['Close'])
                         # Apply spread and slippage to exit price

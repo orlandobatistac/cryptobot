@@ -586,7 +586,13 @@ def main():
             # --- AUTO STRATEGY EVALUATION ---
             print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Evaluating strategy...\n")
             strategy.calculate_indicators(df_resampled)
-            last_candle = df_resampled.iloc[-1]
+            # Update last_candle after calculating indicators to ensure it matches the modified DataFrame
+            if not df_resampled.empty:
+                last_candle = df_resampled.iloc[-1]
+            else:
+                print("No data available after calculating indicators, skipping cycle.")
+                time.sleep(INTERVAL * 60)
+                continue
             auto_action = None
             if not position and strategy.entry_signal(last_candle, df_resampled):
                 auto_action = 'buy'
