@@ -1,10 +1,12 @@
 import signal, functools, os, time, sqlite3, json, subprocess, threading
+from collections import deque
 import krakenex, pandas as pd, requests
 from datetime import datetime
 from strategy import Strategy
 from logger import logger
 from colorama import init, Fore, Style
 from inputimeout import inputimeout, TimeoutOccurred
+from tabulate import tabulate
 import functools
 import sys
 import threading
@@ -20,6 +22,19 @@ def retry(ExceptionToCheck, tries=3, delay=2, backoff=2, logger=None):
             mtries, mdelay = tries, delay
             while mtries > 1:
                 try:
+                    pass  # Add your logic here
+                except Exception as e:
+                    logger.error(f"An error occurred: {e}")
+                except Exception as e:
+                    logger.error(f"An error occurred: {e}")
+                except Exception as e:
+                    logger.error(f"An error occurred: {e}")
+                except Exception as e:
+                    logger.error(f"An error occurred: {e}")
+                except Exception as e:
+                    logger.error(f"An error occurred: {e}")
+                except Exception as e:
+                    logger.error(f"An error occurred: {e}")
                     return f(*args, **kwargs)
                 except ExceptionToCheck as e:
                     msg = f"{f.__name__}: {str(e)}, Retrying in {mdelay} seconds... ({mtries-1} tries left)"
@@ -61,6 +76,9 @@ def retry(ExceptionToCheck, tries=3, delay=2, backoff=2, logger=None):
                 raise
         return f_retry
     return deco_retry
+
+# Define the path to the configuration file
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 
 def load_config():
     """
@@ -257,11 +275,11 @@ def save_trade(trade_type, price, volume, profit, balance, source='manual'):
             c.execute(
                 "INSERT INTO trades (timestamp, type, price, volume, profit, balance, fee, source) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (datetime.utcnow().isoformat(), trade_type, price, volume, profit, balance, fee, source)
+                (datetime.utcnow().isoformat(), trade_type, price, volume, profit, balance, 0, source)  # Default fee to 0
             )
             conn.commit()
             logger.info(
-                f"Trade saved: {trade_type} {volume} @ {price}, profit: {profit}, balance: {balance}, fee: {fee}, source: {source}"
+                f"Trade saved: {trade_type} {volume} @ {price}, profit: {profit}, balance: {balance}, fee: 0, source: {source}"
             )
     except Exception as e:
         logger.error(f"Exception in save_trade: {e}")
@@ -300,7 +318,9 @@ def get_open_position():
                         # Fee/slippage/spread is not stored here, but you could if you save them in the table
                     }
             conn.close()
-        return None
+    except Exception as e:
+        logger.error(f"Exception in get_open_position: {e}")
+    return None
 
 def update_parquet():
     update_script = os.path.join("data", "update_data.py")
@@ -311,7 +331,6 @@ def update_parquet():
     print("Updating prices...")
     with open(os.devnull, 'w') as devnull:
         subprocess.run([
-            "python", update_script
             "python", update_script
         ], check=True, stdout=devnull, stderr=devnull)
 
@@ -405,7 +424,8 @@ def simulate_order(order_type, pair, volume, price=None, validate=True):
             'remaining_volume': 0.0,
             'fee': estimated_fee if estimated_fee is not None else GENERAL_CONFIG["trade_fee"]
         }
-    min_vol = get_min_volume(pair)
+    # Define a default minimum volume or fetch it dynamically if needed
+    min_vol = 0.0001  # Replace with the actual logic if available
     if volume < min_vol:
         logger.warning(f"Volume {volume} is less than the minimum allowed ({min_vol}) for {pair}.")
         print(f"[Simulation] Volume {volume} is less than the minimum allowed ({min_vol}) for {pair}.")
@@ -467,6 +487,9 @@ def get_dynamic_trade_fee():
     except Exception as e:
         logger.error(f"Exception in get_realtime_price: {e}")
         raise
+
+# Define BASE_DIR as the directory of the current script
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Clear console
 def clear_console():
@@ -587,9 +610,7 @@ def main():
         KeyboardInterrupt: If the user stops the program with Ctrl+C.
     """
     setup_database()
-    # Query last balance from DB (thread-safe)
-    with DB_LOCK:
-        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+    with DB_LOCK, sqlite3.connect(DB_FILE, check_same_thread=False) as conn:
         c = conn.cursor()
         c.execute('SELECT balance FROM trades ORDER BY id DESC LIMIT 1')
         last_balance = c.fetchone()
@@ -608,10 +629,11 @@ def main():
     if position:
         initial_summary.append(f"Recovered open position: Entry price ${position['entry_price']:.2f}, Volume {position['volume']:.6f}")
     initial_summary.append(f"Paper trading started. Initial balance: ${balance:.2f}")
-    initial_summary.append("The strategy is evaluated automatically at the close of each daily candle (D1). Monitoring is real-time.")
+    interval = CONFIG["data"]["interval"] if "data" in CONFIG and "interval" in CONFIG["data"] else "1D"
+    initial_summary.append(f"The strategy is evaluated automatically at the close of each {interval} candle. Monitoring is real-time.")
     trades = []
     print(f"Paper trading started. Initial balance: ${balance:.2f}")
-    print("The strategy is evaluated automatically at the close of each daily candle (D1). Monitoring is real-time.")
+    print(f"The strategy is evaluated automatically at the close of each {interval} candle. Monitoring is real-time.")
     print("\nAvailable commands:")
     print("[b] Buy at current price  ")
     print("[s] Sell (close position)  ")
