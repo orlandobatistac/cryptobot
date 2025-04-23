@@ -14,6 +14,8 @@ import shutil
 import logging
 import pandas as pd
 import numpy as np
+import subprocess
+import sys
 
 # Load configuration from config.json
 with open("config.json", "r") as config_file:
@@ -130,6 +132,29 @@ def create_sample_ohlcv_data():
     df.to_parquet(output_file, engine="pyarrow")
     logger.info(f"Sample data saved to {output_file} with {len(df)} points")
 
+@log_debug
+def update_parquet():
+    """
+    Update the Parquet file by running update_data.py.
+    """
+    update_script = os.path.join("data", "update_data.py")
+    if not os.path.isfile(update_script):
+        logger.warning(f"update_data.py not found at {update_script}. Skipping price update.")
+        print(f"Warning: update_data.py not found at {update_script}. Skipping price update.")
+        return
+    print("Updating prices...")
+    try:
+        result = subprocess.run(
+            [sys.executable, update_script],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        logger.info(f"update_data.py output: {result.stdout}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error running update_data.py: {e.stderr}")
+        print(f"Warning: Failed to update parquet data: {e.stderr}")
+
 logger.info("Cryptobot initialized. Logger is configured.")
 
 if __name__ == "__main__":
@@ -186,16 +211,20 @@ if __name__ == "__main__":
                 print_status_with_progress("Step 2: Configuration", "FAILED", pbar)
                 exit(1)
 
-        logger.info("Step 3: Initializing data loading.")
-        with tqdm(total=1, desc="Step 3: Load Data", ncols=100, ascii=".-") as pbar:
+        logger.info("Step 3: Initializing data update and loading.")
+        with tqdm(total=1, desc="Step 3: Update and Load Data", ncols=100, ascii=".-") as pbar:
             try:
+                # Update the Parquet file before loading
+                update_parquet()
+
+                # Load the updated data
                 data_handler = DataHandler(file_path, start_date=start_date, end_date=end_date, interval=interval)
                 data = data_handler.load_data()
                 logger.debug("Data loaded successfully. Data shape: %s", data.shape)
-                print_status_with_progress("Step 3: Load Data", "OK", pbar)
+                print_status_with_progress("Step 3: Update and Load Data", "OK", pbar)
             except Exception as e:
                 logger.error(f"Step 3 failed: {e}", exc_info=True)
-                print_status_with_progress("Step 3: Load Data", "FAILED", pbar)
+                print_status_with_progress("Step 3: Update and Load Data", "FAILED", pbar)
                 exit(1)
 
         logger.info("Step 4: Initializing data validation.")

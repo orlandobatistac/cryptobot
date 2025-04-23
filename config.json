@@ -45,7 +45,7 @@
     },
     "data": {
         "start_date": "2020-01-01",
-        "end_date": "2025-04-05",
+        "end_date": "2025-04-23",
         "interval": "1D",
         "data_file_path": "data/ohlc_data_60min_all_years.parquet",
         "output_dir": "results/backtest"
