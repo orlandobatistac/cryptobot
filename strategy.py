@@ -4,6 +4,7 @@ import pandas as pd
 import json
 from logger import logger
 from functools import wraps
+import datetime
 
 def log_debug(func):
     @wraps(func)
@@ -73,6 +74,9 @@ class Strategy:
         """
         logger.debug("Starting indicator calculation. Data shape: %s", data.shape)
         try:
+            # Save a copy of the original dates for verification
+            original_dates = data.index.copy()
+            
             # Add signal tracking columns
             data['entry_signal_generated'] = False
             data['exit_signal_generated'] = False
@@ -138,7 +142,7 @@ class Strategy:
             # Calculate Supertrend (used only if use_supertrend is True)
             atr = data['atr']
             hl2 = (data['High'] + data['Low']) / 2
-            data['supertrend_upper'] = hl2 + (self.config['supertrend_multiplier'] * atr)  # Corregido: '_mplier' a 'supertrend_multiplier'
+            data['supertrend_upper'] = hl2 + (self.config['supertrend_multiplier'] * atr)
             data['supertrend_lower'] = hl2 - (self.config['supertrend_multiplier'] * atr)
             data['supertrend'] = (data['Close'] > data['supertrend_lower']).astype(int)
 
@@ -155,14 +159,40 @@ class Strategy:
             data['senkou_span_b'] = ((high_52 + low_52) / 2).shift(26)
             data['chikou_span'] = data['Close'].shift(-26)
 
-            # Drop NaN values after all calculations
-            data.dropna(inplace=True)
+            # Replace data.dropna(inplace=True) with a more robust strategy
+            # Preserve the last 5 rows even if they have NaN
+            recent_rows = data.iloc[-5:].copy()
+            main_data = data.iloc[:-5]
+            
+            # Remove NaN from historical data
+            main_data = main_data.dropna()
+            
+            # For recent rows, apply ffill to fill NaN
+            recent_rows = recent_rows.ffill()
+            
+            # Combine both datasets
+            data = pd.concat([main_data, recent_rows])
+            
+            # Check that we have not lost the last date
+            if data.index[-1] != original_dates[-1]:
+                logger.warning(f"The last date {original_dates[-1]} was lost during indicator calculation. Using {data.index[-1]}")
+                
             if data.empty:
                 logger.warning("All data dropped after indicator calculation due to NaN values.")
             logger.debug("Indicators calculated. Final data shape: %s", data.shape)
         except Exception as e:
             logger.error(f"Error calculating indicators: {e}")
             raise
+
+    def get_last_valid_row(self, data):
+        """
+        Returns the last row whose index is not a future date.
+        """
+        now = datetime.datetime.now()
+        valid_data = data[data.index <= now]
+        if not valid_data.empty:
+            return valid_data.iloc[-1]
+        return None
 
     @log_debug
     def entry_signal(self, row, data, is_backtest=False):
@@ -174,6 +204,15 @@ class Strategy:
         :return: True if entry signal is triggered, False otherwise.
         """
         try:
+            # Nueva validación: no procesar velas futuras
+            now = datetime.datetime.now()
+            if isinstance(row.name, pd.Timestamp):
+                row_time = row.name.to_pydatetime()
+            else:
+                row_time = row.name
+            if row_time > now:
+                logger.warning(f"Intento de evaluar vela futura: {row_time} (hoy: {now})")
+                return False
             if row.get('entry_signal_generated', False) or self.position_open:
                 return False
             idx = row.name
@@ -250,6 +289,15 @@ class Strategy:
         :return: True if exit signal is triggered, False otherwise.
         """
         try:
+            # Nueva validación: no procesar velas futuras
+            now = datetime.datetime.now()
+            if isinstance(row.name, pd.Timestamp):
+                row_time = row.name.to_pydatetime()
+            else:
+                row_time = row.name
+            if row_time > now:
+                logger.warning(f"Intento de evaluar vela futura: {row_time} (hoy: {now})")
+                return False
             if row.get('exit_signal_generated', False) or not self.position_open or self.last_entry_time == row.name:
                 return False
             if not is_backtest:

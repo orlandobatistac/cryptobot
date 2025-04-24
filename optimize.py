@@ -29,12 +29,12 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# Configurar verbosidad de Optuna dependiendo de cómo se ejecuta el archivo
+# Configure Optuna verbosity depending on how the file is executed
 if __name__ != "__main__":
-    # Si se importa (ej. desde main.py), silenciar los detalles de los trials
+    # If imported (e.g., from main.py), silence trial details
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 else:
-    # Si se ejecuta directamente (python optimize.py), mostrar todos los detalles
+    # If executed directly (python optimize.py), show all details
     optuna.logging.set_verbosity(optuna.logging.INFO)
 
 # Load base configuration

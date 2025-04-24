@@ -2,15 +2,15 @@ from backtest import Backtester
 from strategy import Strategy
 import pandas as pd
 
-# Cargar datos
+# Load data
 df = pd.read_parquet("data/ohlc_data_60min_all_years.parquet")
 df["Timestamp"] = pd.to_datetime(df["Timestamp"])
 df.set_index("Timestamp", inplace=True)
 
-# Crear estrategia
+# Create strategy
 strategy = Strategy()
 
-# Crear backtester
+# Create backtester
 backtester = Backtester(
     data=df,
     strategy=strategy,
@@ -20,10 +20,10 @@ backtester = Backtester(
     debug=True
 )
 
-# Ejecutar backtest
+# Run backtest
 backtester.run()
 
-# Generar métricas y gráficos
+# Generate metrics and plots
 metrics = backtester.calculate_metrics()
 print("Metrics:", metrics)
 backtester.plot_results(output_folder="results/backtest")

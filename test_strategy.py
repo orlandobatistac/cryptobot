@@ -1,18 +1,18 @@
 from strategy import Strategy
 import pandas as pd
 
-# Cargar datos
+# Load data
 df = pd.read_parquet("data/ohlc_data_60min_all_years.parquet")
 df["Timestamp"] = pd.to_datetime(df["Timestamp"])
 df.set_index("Timestamp", inplace=True)
 
-# Crear estrategia
+# Create strategy
 strategy = Strategy()
 
-# Calcular indicadores
+# Calculate indicators
 strategy.calculate_indicators(df)
 
-# Evaluar señales en la última vela
+# Evaluate signals on the last candle
 last_candle = df.iloc[-1]
 entry_signal = strategy.entry_signal(last_candle, df, is_backtest=False)
 print("Entry signal:", entry_signal)

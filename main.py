@@ -244,6 +244,16 @@ if __name__ == "__main__":
                 print_status_with_progress("Step 4: Validate Data", "FAILED", pbar)
                 exit(1)
 
+        # Filter future candles before evaluating the signal
+        now = datetime.now()
+        data_valid = data[data.index <= now]
+        if not data_valid.empty:
+            last_row = data_valid.iloc[-1]
+            # Here you can call your signal logic, for example:
+            # signal = strategy.entry_signal(last_row, data_valid)
+        else:
+            logger.warning("No valid candles to evaluate.")
+
         logger.info("Step 5: Checking optimization status.")
         with tqdm(total=config["optimization"]["n_trials"], desc="Step 5: Optimization", ncols=100, ascii=".-", mininterval=0.1, dynamic_ncols=False) as pbar:
             try:

@@ -1,7 +1,7 @@
 import signal, functools, os, time, sqlite3, json, subprocess, threading, sys
 from collections import deque
 import pandas as pd, requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from strategy import Strategy
 from logger import logger
 from colorama import init, Fore, Style
@@ -82,7 +82,7 @@ k = krakenex.API()
 
 # Parameters
 PAIR = "XXBTZUSD"  # BTC/USD
-INTERVAL = 1  # minutes
+INTERVAL = 1  # minutes (monitoring interval)
 DB_FILE = "paper_trades.db"
 
 # Initialize threading lock for database operations
@@ -308,10 +308,10 @@ def get_open_position():
         if not sell:
             logger.info(f"Open position found: entry {buy_price}, volume {buy_volume}, source {source}")
             return {
-                "entry_price": buy_price,
-                "volume": buy_volume,
-                "entry_time": pd.to_datetime(buy_time),
-                "source": source
+                'entry_price': buy_price,
+                'volume': buy_volume,
+                'entry_time': pd.to_datetime(buy_time),
+                'source': source
             }
         return None
 
@@ -551,34 +551,83 @@ def main():
     print("[s] Sell (close position)  ")
     print("[q] Quit bot  \n")
     cycle = 0
-    last_resampled_time = None
+    next_evaluation_time = None
+
+    # Convert interval to seconds for evaluation timing
+    interval_seconds = {
+        '1D': 24 * 60 * 60,
+        '4H': 4 * 60 * 60,
+        '1W': 7 * 24 * 60 * 60,
+        '1H': 60 * 60,
+        '60min': 60 * 60,
+    }.get(interval, 24 * 60 * 60)  # Default to 1D if interval not recognized
+
+    # Try to load existing data at startup
+    df_resampled = None
+    try:
+        df = pd.read_parquet(os.path.join(BASE_DIR, "data", "ohlc_data_60min_all_years.parquet"))
+        df["Timestamp"] = pd.to_datetime(df["Timestamp"])
+        df.set_index("Timestamp", inplace=True)
+        start_time = df.index.min().floor(interval)
+        end_time = pd.Timestamp(datetime.utcnow()).floor(interval)
+        time_range = pd.date_range(start=start_time, end=end_time, freq=interval)
+        df_resampled = df.resample(interval, closed='left', label='left').agg({
+            'Open': 'first',
+            'High': 'max',
+            'Low': 'min',
+            'Close': 'last',
+            'Volume': 'sum'
+        })
+        # Do not drop NA to keep the most recent candles
+        # df_resampled = df_resampled.dropna()
+    except Exception as e:
+        logger.error(f"Initial load of parquet data failed: {e}")
+        print(f"Warning: Unable to load initial parquet data: {e}. Continuing without data.")
 
     try:
         while RUNNING:
             cycle += 1
+            current_time = pd.Timestamp(datetime.utcnow())
             # Update parquet with new 60min candles
-            try:
-                update_parquet()
-            except Exception as e:
-                logger.error(f"Error updating parquet data: {e}")
-                print("Warning: failed to update data, skipping cycle.")
+            update_parquet()
+
+            # Load data from parquet file
             try:
                 df = pd.read_parquet(os.path.join(BASE_DIR, "data", "ohlc_data_60min_all_years.parquet"))
                 df["Timestamp"] = pd.to_datetime(df["Timestamp"])
                 df.set_index("Timestamp", inplace=True)
-                interval = CONFIG["data"]["interval"] if "data" in CONFIG and "interval" in CONFIG["data"] else "1D"
-                df_resampled = df.resample(interval).agg({
+                # Resample to the configured interval (e.g., '1D')
+                start_time = df.index.min().floor(interval)
+                end_time = current_time.floor(interval)
+                time_range = pd.date_range(start=start_time, end=end_time, freq=interval)
+                df_resampled = df.resample(interval, closed='left', label='left').agg({
                     'Open': 'first',
                     'High': 'max',
                     'Low': 'min',
                     'Close': 'last',
                     'Volume': 'sum'
-                }).dropna()
+                })
+
+                # Include partial candle for the current day
+                last_full_candle = df_resampled.index[-1] if not df_resampled.empty else end_time
+                if df.index.max() > last_full_candle:
+                    partial_data = df[df.index > last_full_candle]
+                    if not partial_data.empty:
+                        partial_candle = pd.DataFrame({
+                            'Open': [partial_data['Open'].iloc[0]],
+                            'High': [partial_data['High'].max()],
+                            'Low': [partial_data['Low'].min()],
+                            'Close': [partial_data['Close'].iloc[-1]],
+                            'Volume': [partial_data['Volume'].sum()]
+                        }, index=[last_full_candle + pd.Timedelta(seconds=interval_seconds)])
+                        df_resampled = pd.concat([df_resampled, partial_candle])
             except Exception as e:
                 logger.error(f"Error loading parquet data: {e}")
-                print("Warning: error loading parquet data, skipping cycle.")
-                time.sleep(INTERVAL * 60)
-                continue
+                print(f"Warning: error loading parquet data: {e}. Using last known data if available.")
+                if df_resampled is None:
+                    print("No previous data available. Skipping cycle.")
+                    time.sleep(INTERVAL * 60)
+                    continue
 
             clear_console()
             for line in initial_summary:
@@ -587,46 +636,73 @@ def main():
             print_trade_status(cycle, position, balance, realtime_price, trade_fee, session_start_time)
 
             # --- AUTO STRATEGY EVALUATION ---
-            print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Evaluating strategy...\n")
-            strategy.calculate_indicators(df_resampled)
-            # Update last_candle after calculating indicators to ensure it matches the modified DataFrame
-            if not df_resampled.empty:
-                last_candle = df_resampled.iloc[-1]
-                logger.debug(f"Last candle timestamp: {last_candle.name}, Price: {last_candle['Close']}")
+            # Only evaluate the strategy at the close of each interval
+            should_evaluate = False
+            if next_evaluation_time is None:
+                # Set the next evaluation time to the end of the current interval
+                next_evaluation_time = (current_time + pd.Timedelta(seconds=interval_seconds)).floor(interval)
+                should_evaluate = True  # Evaluate immediately on first cycle
+            elif current_time >= next_evaluation_time:
+                should_evaluate = True
+                next_evaluation_time = (next_evaluation_time + pd.Timedelta(seconds=interval_seconds)).floor(interval)
+
+            if should_evaluate:
+                print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Evaluating strategy...\n")
+                strategy.calculate_indicators(df_resampled)
+                # Update last_candle after calculating indicators to ensure it matches the modified DataFrame
+                if not df_resampled.empty:
+                    now = datetime.now()
+                    data_valid = df_resampled[df_resampled.index <= now]
+                    if not data_valid.empty:
+                        last_candle = data_valid.iloc[-1]
+                        logger.debug(f"Last candle timestamp: {last_candle.name}, Price: {last_candle['Close']}")
+                    else:
+                        logger.warning("No valid candles to evaluate.")
+                        print("No data available after calculating indicators, skipping cycle.")
+                        time.sleep(INTERVAL * 60)
+                        continue
+                auto_action = None
+                if not position and strategy.entry_signal(last_candle, data_valid, is_backtest=False):
+                    auto_action = 'buy'
+                    print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Entry signal detected.")
+                    # Use real-time price for buying
+                    auto_price = realtime_price
+                    if auto_price is None:
+                        print("Cannot buy: real-time price unavailable.")
+                        time.sleep(INTERVAL * 60)
+                        continue
+                    invest_amount = balance * investment_fraction
+                    if invest_amount >= 1e-8 and balance > 0:
+                        volume = invest_amount / auto_price
+                        balance -= invest_amount
+                        # Use current time for the entry time
+                        entry_time = datetime.utcnow()
+                        save_trade('buy', auto_price, volume, 0, balance, source='auto', fee=trade_fee)
+                        position = {
+                            'entry_price': auto_price,
+                            'volume': volume,
+                            'entry_time': entry_time,
+                            'source': 'auto'
+                        }
+                        print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Auto BUY: {volume:.6f} BTC @ ${auto_price:,.2f}")
+                # Auto SELL
+                elif position and strategy.exit_signal(last_candle, data_valid, is_backtest=False):
+                    auto_action = 'sell'
+                    print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Exit signal detected.")
+                    # Use real-time price for selling
+                    auto_price = realtime_price
+                    if auto_price is None:
+                        print("Cannot sell: real-time price unavailable.")
+                        time.sleep(INTERVAL * 60)
+                        continue
+                    pl = (auto_price - position['entry_price']) * position['volume']
+                    pl -= (position['entry_price'] + auto_price) * position['volume'] * trade_fee
+                    balance += (auto_price * position['volume']) + pl
+                    save_trade('sell', auto_price, position['volume'], pl, balance, source='auto', fee=trade_fee)
+                    print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Auto SELL: {position['volume']:.6f} BTC @ ${auto_price:,.2f} | P/L: ${pl:,.2f}")
+                    position = None
             else:
-                print("No data available after calculating indicators, skipping cycle.")
-                time.sleep(INTERVAL * 60)
-                continue
-            auto_action = None
-            if not position and strategy.entry_signal(last_candle, df_resampled, is_backtest=False):
-                auto_action = 'buy'
-                print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Entry signal detected.")
-                auto_price = last_candle['Close']
-                invest_amount = balance * investment_fraction
-                if invest_amount >= 1e-8 and balance > 0:
-                    volume = invest_amount / auto_price
-                    balance -= invest_amount
-                    # Use last_candle time for consistency with backtest
-                    entry_time = last_candle.name.to_pydatetime() if hasattr(last_candle.name, 'to_pydatetime') else last_candle.name
-                    save_trade('buy', auto_price, volume, 0, balance, source='auto', fee=trade_fee)
-                    position = {
-                        'entry_price': auto_price,
-                        'volume': volume,
-                        'entry_time': entry_time,
-                        'source': 'auto'
-                    }
-                    print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Auto BUY: {volume:.6f} BTC @ ${auto_price:,.2f}")
-            # Auto SELL
-            elif position and strategy.exit_signal(last_candle, df_resampled, is_backtest=False):
-                auto_action = 'sell'
-                print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Exit signal detected.")
-                auto_price = last_candle['Close']
-                pl = (auto_price - position['entry_price']) * position['volume']
-                pl -= (position['entry_price'] + auto_price) * position['volume'] * trade_fee
-                balance += (auto_price * position['volume']) + pl
-                save_trade('sell', auto_price, position['volume'], pl, balance, source='auto', fee=trade_fee)
-                print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Auto SELL: {position['volume']:.6f} BTC @ ${auto_price:,.2f} | P/L: ${pl:,.2f}")
-                position = None
+                print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Waiting for next {interval} candle to evaluate strategy...\n")
 
             # Show available commands to the user
             print("Available commands:")
@@ -679,12 +755,12 @@ def main():
             elif user_input == 'b' and position:
                 print("You already have an open position. Close it before buying again.")
                 time.sleep(4)
-                continue
             elif user_input == 's' and not position:
                 print("No open position to sell.")
             # else: just continue
 
             # If user_input was empty (timeout), just continue to next cycle
+            time.sleep(INTERVAL * 60)
     except KeyboardInterrupt:
         print("\nBot manually stopped by user (Ctrl+C).\n")
         logger.info("Bot manually stopped by user (Ctrl+C).")
