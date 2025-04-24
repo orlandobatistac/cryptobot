@@ -316,6 +316,9 @@ def get_open_position():
         return None
 
 def update_parquet():
+    """
+    Update the Parquet file by running update_data.py.
+    """
     update_script = os.path.join("data", "update_data.py")
     if not os.path.isfile(update_script):
         logger.warning(f"update_data.py not found at {update_script}. Skipping price update.")
@@ -589,12 +592,13 @@ def main():
             # Update last_candle after calculating indicators to ensure it matches the modified DataFrame
             if not df_resampled.empty:
                 last_candle = df_resampled.iloc[-1]
+                logger.debug(f"Last candle timestamp: {last_candle.name}, Price: {last_candle['Close']}")
             else:
                 print("No data available after calculating indicators, skipping cycle.")
                 time.sleep(INTERVAL * 60)
                 continue
             auto_action = None
-            if not position and strategy.entry_signal(last_candle, df_resampled):
+            if not position and strategy.entry_signal(last_candle, df_resampled, is_backtest=False):
                 auto_action = 'buy'
                 print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Entry signal detected.")
                 auto_price = last_candle['Close']
@@ -602,11 +606,8 @@ def main():
                 if invest_amount >= 1e-8 and balance > 0:
                     volume = invest_amount / auto_price
                     balance -= invest_amount
-                    # Use datetime.utcnow() if using realtime price, else use last_candle time
-                    if auto_price == last_candle['Close']:
-                        entry_time = last_candle.name.to_pydatetime() if hasattr(last_candle.name, 'to_pydatetime') else last_candle.name
-                    else:
-                        entry_time = datetime.utcnow()
+                    # Use last_candle time for consistency with backtest
+                    entry_time = last_candle.name.to_pydatetime() if hasattr(last_candle.name, 'to_pydatetime') else last_candle.name
                     save_trade('buy', auto_price, volume, 0, balance, source='auto', fee=trade_fee)
                     position = {
                         'entry_price': auto_price,
@@ -616,7 +617,7 @@ def main():
                     }
                     print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Auto BUY: {volume:.6f} BTC @ ${auto_price:,.2f}")
             # Auto SELL
-            elif position and strategy.exit_signal(last_candle, df_resampled):
+            elif position and strategy.exit_signal(last_candle, df_resampled, is_backtest=False):
                 auto_action = 'sell'
                 print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Exit signal detected.")
                 auto_price = last_candle['Close']
