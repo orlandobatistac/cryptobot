@@ -1,0 +1,28 @@
+{
+    "capital": {
+        "initial": 1000.0,
+        "final": 13332.481334186237,
+        "total_profit": 12332.481334186237,
+        "pl_percent": 1233.25
+    },
+    "trades": {
+        "number_of_trades": 52,
+        "win_rate": 46.15,
+        "avg_trade_duration_hours": 353.08,
+        "profit_factor": 2.31,
+        "expectancy": 237.16
+    },
+    "fees": {
+        "total_fees": 1914.08
+    },
+    "performance": {
+        "max_drawdown": -2976.05,
+        "sharpe_ratio": 4.97,
+        "sortino_ratio": 34.33
+    },
+    "buy_and_hold": {
+        "final_capital": 7931.199772005216,
+        "profit": 6931.199772005216,
+        "pl_percent": 693.12
+    }
+}

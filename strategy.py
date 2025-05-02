@@ -25,6 +25,7 @@ logger.debug("Starting execution of strategy.py")
 with open("config.json", "r") as f:
     config = json.load(f)
 strategy_params = config["strategy"]
+general_params = config["general"]
 
 class Strategy:
     def __init__(self, config=None):
@@ -34,6 +35,7 @@ class Strategy:
         """
         # Default configuration (updated with optimized parameters)
         self.default_config = strategy_params
+        self.general_config = general_params
 
         # Use provided config if available, otherwise use default
         self.config = self.default_config.copy()
@@ -159,6 +161,38 @@ class Strategy:
             data['senkou_span_b'] = ((high_52 + low_52) / 2).shift(26)
             data['chikou_span'] = data['Close'].shift(-26)
 
+            # Calculate SMA200
+            data['sma_200'] = data['Close'].rolling(200).mean()
+
+            # Detect candlestick patterns (bullish engulfing and hammer)
+            def is_bullish_engulfing(df):
+                prev = df.iloc[-2]
+                curr = df.iloc[-1]
+                return (
+                    prev['Close'] < prev['Open'] and
+                    curr['Close'] > curr['Open'] and
+                    curr['Close'] > prev['Open'] and
+                    curr['Open'] < prev['Close']
+                )
+            def is_hammer(df):
+                curr = df.iloc[-1]
+                body = abs(curr['Close'] - curr['Open'])
+                lower_shadow = min(curr['Open'], curr['Close']) - curr['Low']
+                upper_shadow = curr['High'] - max(curr['Open'], curr['Close'])
+                return (
+                    lower_shadow > 2 * body and
+                    upper_shadow < body
+                )
+            data['bullish_engulfing'] = False
+            data['hammer'] = False
+            if len(data) > 2:
+                for i in range(1, len(data)):
+                    window = data.iloc[max(0, i-1):i+1]
+                    if len(window) == 2:
+                        data.iloc[i, data.columns.get_loc('bullish_engulfing')] = is_bullish_engulfing(window)
+                    if len(window) == 2:
+                        data.iloc[i, data.columns.get_loc('hammer')] = is_hammer(window)
+
             # Replace data.dropna(inplace=True) with a more robust strategy
             # Preserve the last 5 rows even if they have NaN
             recent_rows = data.iloc[-5:].copy()
@@ -251,7 +285,8 @@ class Strategy:
             }
             
             # Decide trading mode
-            if lateral_market:
+            lateral_mode_enabled = self.general_config.get("lateral_mode", True)
+            if lateral_mode_enabled and lateral_market:
                 # Only evaluate range trading conditions in sideways market
                 signal = all(range_conditions.values())
                 self.is_range_trading = signal

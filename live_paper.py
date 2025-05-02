@@ -72,17 +72,6 @@ def load_config():
         json.JSONDecodeError: If the JSON is invalid.
     """
     with open(CONFIG_PATH, "r") as f:
-    """
-    Load and parse the JSON configuration file.
-
-    Returns:
-        dict: Configuration data parsed from JSON.
-
-    Raises:
-        FileNotFoundError: If the config file does not exist.
-        json.JSONDecodeError: If the JSON is invalid.
-    """
-    with open(CONFIG_PATH, "r") as f:
         return json.load(f)
 
 CONFIG = load_config()
@@ -106,12 +95,6 @@ def setup_database():
     Raises:
         sqlite3.OperationalError: On database operation failure.
     """
-    """
-    Initialize SQLite database and ensure the trades and initial_balance tables exist.
-
-    Raises:
-        sqlite3.OperationalError: On database operation failure.
-    """
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     # Create trades table with correct columns
@@ -123,7 +106,6 @@ def setup_database():
         volume REAL,
         profit REAL,
         balance REAL,
-        fee REAL DEFAULT 0,
         fee REAL DEFAULT 0,
         source TEXT DEFAULT 'manual'
     )''')
@@ -236,23 +218,7 @@ def get_latest_candle(pair, interval):
         requests.Timeout: If API call times out.
         Exception: For other unexpected errors.
     """
-    """
-    Fetch the latest OHLC candle for a trading pair.
-
-    Args:
-        pair (str): Asset pair code (e.g. 'XXBTZUSD').
-        interval (int): Candle interval in minutes.
-
-    Returns:
-        pandas.DataFrame: DataFrame with one row representing the latest candle.
-
-    Raises:
-        requests.ConnectionError: If API call fails.
-        requests.Timeout: If API call times out.
-        Exception: For other unexpected errors.
-    """
     try:
-        resp = query_public_throttled('OHLC', {'pair': pair, 'interval': interval})
         resp = query_public_throttled('OHLC', {'pair': pair, 'interval': interval})
         if resp["error"]:
             logger.error(f"Kraken API error: {resp['error']}")
@@ -300,11 +266,6 @@ def save_trade(trade_type, price, volume, profit, balance, source='manual', fee=
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (datetime.utcnow().isoformat(), trade_type, price, volume, profit, balance, fee, source)
             )
-            c.execute(
-                "INSERT INTO trades (timestamp, type, price, volume, profit, balance, fee, source) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (datetime.utcnow().isoformat(), trade_type, price, volume, profit, balance, fee, source)
-            )
             conn.commit()
             logger.info(
                 f"Trade saved: {trade_type} {volume} @ {price}, profit: {profit}, balance: {balance}, fee: {fee}, source: {source}"
@@ -313,7 +274,6 @@ def save_trade(trade_type, price, volume, profit, balance, source='manual', fee=
         logger.error(f"Exception in save_trade: {e}")
         print(f"Warning: Failed to save trade to database: {e}. Continuing without saving.")
 
-@retry((sqlite3.OperationalError, sqlite3.DatabaseError), tries=3, delay=2, backoff=2, logger=logger)
 @retry((sqlite3.OperationalError, sqlite3.DatabaseError), tries=3, delay=2, backoff=2, logger=logger)
 def get_open_position():
     """
@@ -334,6 +294,8 @@ def get_open_position():
         last_buy = c.fetchone()
         if not last_buy:
             return None
+        if len(last_buy) < 6:
+            raise ValueError("Malformed data from trades table: expected at least 6 fields, got {}".format(len(last_buy)))
         buy_id = last_buy[0]
         buy_time = last_buy[1]
         buy_price = last_buy[2]
@@ -393,22 +355,7 @@ def get_realtime_price(pair):
         requests.Timeout: If API call times out.
         Exception: For other unexpected errors.
     """
-    """
-    Fetch the current market price for a given trading pair.
-
-    Args:
-        pair (str): Asset pair code (e.g. 'XXBTZUSD').
-
-    Returns:
-        float: Last traded price, or None on API error.
-
-    Raises:
-        requests.ConnectionError: If API call fails.
-        requests.Timeout: If API call times out.
-        Exception: For other unexpected errors.
-    """
     try:
-        resp = query_public_throttled('Ticker', {'pair': pair})
         resp = query_public_throttled('Ticker', {'pair': pair})
         if resp["error"]:
             logger.error(f"Kraken API error: {resp['error']}")
@@ -464,22 +411,9 @@ def clear_console():
     """
     Clear the terminal screen based on the operating system.
     """
-    """
-    Clear the terminal screen based on the operating system.
-    """
     os.system('cls' if os.name == 'nt' else 'clear')
 
 def input_with_timeout(prompt, timeout):
-    """
-    Prompt the user for input with a timeout.
-
-    Args:
-        prompt (str): Prompt message displayed to the user.
-        timeout (int or float): Seconds to wait for input.
-
-    Returns:
-        str: User input or empty string on timeout or interruption.
-    """
     """
     Prompt the user for input with a timeout.
 
@@ -583,13 +517,14 @@ def print_trade_status(cycle, position, balance, realtime_price, trade_fee, sess
     print(tabulate(table, headers, tablefmt="plain"))
     print(f"{Fore.CYAN}{'='*40}{Style.RESET_ALL}\n")
 
-def main():
+def get_min_volume(pair):
     """
-    Main paper trading loop: initializes database, loads data, evaluates strategy, and handles user input.
+    Devuelve el volumen mínimo permitido para el par dado.
+    """
+    # Puedes ajustar este valor según el par o hacerlo configurable
+    return 0.001
 
-    Raises:
-        KeyboardInterrupt: If the user stops the program with Ctrl+C.
-    """
+def main():
     """
     Main paper trading loop: initializes database, loads data, evaluates strategy, and handles user input.
 
@@ -607,17 +542,10 @@ def main():
             balance = record[0] if record else GENERAL_CONFIG["initial_capital"]
         else:
             balance = last_balance[0]
-        if not last_balance:
-            c.execute('SELECT balance FROM initial_balance ORDER BY id DESC LIMIT 1')
-            record = c.fetchone()
-            balance = record[0] if record else GENERAL_CONFIG["initial_capital"]
-        else:
-            balance = last_balance[0]
     trade_fee = GENERAL_CONFIG["trade_fee"]
     investment_fraction = GENERAL_CONFIG["investment_fraction"]
     strategy = Strategy()
     position = get_open_position()
-    session_start_time = datetime.utcnow()
     session_start_time = datetime.utcnow()
     initial_summary = []
     if position:
@@ -625,14 +553,12 @@ def main():
     initial_summary.append(f"Paper trading started. Initial balance: ${balance:.2f}")
     interval = CONFIG["data"]["interval"] if "data" in CONFIG and "interval" in CONFIG["data"] else "1D"
     initial_summary.append(f"The strategy is evaluated automatically at the close of each {interval} candle. Monitoring is real-time.")
-    print(f"Paper trading started. Initial balance: ${balance:.2f}")
-    print(f"The strategy is evaluated automatically at the close of each {interval} candle. Monitoring is real-time.")
     print("\nAvailable commands:")
     print("[b] Buy at current price  ")
     print("[s] Sell (close position)  ")
     print("[q] Quit bot  \n")
     cycle = 0
-    next_evaluation_time = None
+    last_evaluated_candle = None  # Para controlar la última vela procesada
 
     # Convert interval to seconds for evaluation timing
     interval_seconds = {
@@ -716,32 +642,24 @@ def main():
             realtime_price = get_realtime_price(PAIR)
             print_trade_status(cycle, position, balance, realtime_price, trade_fee, session_start_time)
 
-            # --- AUTO STRATEGY EVALUATION ---
-            # Only evaluate the strategy at the close of each interval
-            should_evaluate = False
-            if next_evaluation_time is None:
-                # Set the next evaluation time to the end of the current interval
-                next_evaluation_time = (current_time + pd.Timedelta(seconds=interval_seconds)).floor(interval)
-                should_evaluate = True  # Evaluate immediately on first cycle
-            elif current_time >= next_evaluation_time:
-                should_evaluate = True
-                next_evaluation_time = (next_evaluation_time + pd.Timedelta(seconds=interval_seconds)).floor(interval)
+            # --- AUTO STRATEGY EVALUATION SOLO SI HAY NUEVA VELA ---
+            # Detectar la última vela disponible
+            if not df_resampled.empty:
+                now = datetime.now()
+                data_valid = df_resampled[df_resampled.index <= now]
+                if not data_valid.empty:
+                    last_candle = data_valid.iloc[-1]
+                    last_candle_time = last_candle.name
+                else:
+                    last_candle_time = None
+            else:
+                last_candle_time = None
 
-            if should_evaluate:
-                print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Evaluating strategy...\n")
+            # Solo evaluar si hay una nueva vela
+            if last_candle_time is not None and last_candle_time != last_evaluated_candle:
+                last_evaluated_candle = last_candle_time
+                print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Evaluating strategy (new candle)...\n")
                 strategy.calculate_indicators(df_resampled)
-                # Update last_candle after calculating indicators to ensure it matches the modified DataFrame
-                if not df_resampled.empty:
-                    now = datetime.now()
-                    data_valid = df_resampled[df_resampled.index <= now]
-                    if not data_valid.empty:
-                        last_candle = data_valid.iloc[-1]
-                        logger.debug(f"Last candle timestamp: {last_candle.name}, Price: {last_candle['Close']}")
-                    else:
-                        logger.warning("No valid candles to evaluate.")
-                        print("No data available after calculating indicators, skipping cycle.")
-                        time.sleep(INTERVAL * 60)
-                        continue
                 auto_action = None
                 if not position and strategy.entry_signal(last_candle, data_valid, is_backtest=False):
                     auto_action = 'buy'
@@ -783,16 +701,14 @@ def main():
                     print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Auto SELL: {position['volume']:.6f} BTC @ ${auto_price:,.2f} | P/L: ${pl:,.2f}")
                     position = None
             else:
-                print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Waiting for next {interval} candle to evaluate strategy...\n")
+                print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Waiting for new candle to evaluate strategy...\n")
 
-            # Show available commands to the user
             # Show available commands to the user
             print("Available commands:")
             print("[b] Buy at current price  ")
             print("[s] Sell (close position)  ")
             print("[q] Quit bot  \n")
             user_input = input_with_timeout("Press Enter after choosing an option: ", INTERVAL * 60).strip().lower()
-            print()
             print()
 
             if user_input == 'q':
@@ -801,14 +717,12 @@ def main():
                 break
             elif user_input == 'b' and not position:
                 realtime_price = get_realtime_price(PAIR)
-                realtime_price = get_realtime_price(PAIR)
                 if not realtime_price:
                     print("Cannot buy: real-time price unavailable.")
                 elif balance <= 0:
                     print("Insufficient balance to buy.")
                 else:
                     invest_amount = balance * investment_fraction
-                    if invest_amount < 1e-8:
                     if invest_amount < 1e-8:
                         print("Investment amount too small to execute a trade.")
                     else:
@@ -825,7 +739,6 @@ def main():
                         print(f"Simulated BUY: {volume:.6f} BTC @ ${realtime_price:,.2f}")
                         logger.info(f"Simulated BUY: {volume:.6f} BTC @ ${realtime_price:,.2f}")
             elif user_input == 's' and position:
-                realtime_price = get_realtime_price(PAIR)
                 realtime_price = get_realtime_price(PAIR)
                 if not realtime_price:
                     print("Cannot sell: real-time price unavailable.")
@@ -850,8 +763,6 @@ def main():
     except KeyboardInterrupt:
         print("\nBot manually stopped by user (Ctrl+C).\n")
         logger.info("Bot manually stopped by user (Ctrl+C).")
-    finally:
-        print_session_summary()
     finally:
         print_session_summary()
 
