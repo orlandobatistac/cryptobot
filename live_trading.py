@@ -47,6 +47,7 @@ RUNNING = True
 metrics = {
     'start_time': datetime.utcnow(),
     'trades_executed': 0,
+    'trades_won': 0,
     'total_profit': 0.0,
     'last_trade': None,  # {'type': 'buy'/'sell', 'time': datetime, 'price': float, 'volume': float}
     'max_drawdown': 0.0,
@@ -155,9 +156,14 @@ def print_metrics(metrics, position, realtime_price):
     pl_unrealized = 0
     if position and realtime_price:
         pl_unrealized = (realtime_price - position['entry_price']) * position['volume']
+    # Calculate win rate
+    total_trades = metrics.get('trades_executed', 0)
+    wins = metrics.get('trades_won', 0)
+    win_rate = (wins / total_trades * 100) if total_trades else 0
     print("\n--- BOT EXECUTION METRICS ---")
     print(f"Uptime: {str(uptime).split('.')[0]}")
-    print(f"Executed trades: {metrics['trades_executed']}")
+    print(f"Executed trades: {total_trades}")
+    print(f"Win rate: {win_rate:.2f}%")
     print(f"Total realized profit: ${metrics['total_profit']:.2f}")
     print(f"Unrealized P/L: ${pl_unrealized:.2f}")
     if metrics['last_trade']:
@@ -255,6 +261,8 @@ def main():
                             }
                             # Update trade metrics
                             metrics['trades_executed'] += 1
+                            if 'trades_won' not in metrics:
+                                metrics['trades_won'] = 0
                             metrics['last_trade'] = {
                                 'type': 'buy',
                                 'time': datetime.utcnow(),
@@ -279,6 +287,8 @@ def main():
                     profit = (realtime_price - position['entry_price']) * position['volume']
                     metrics['total_profit'] += profit
                     metrics['trades_executed'] += 1
+                    if profit > 0:
+                        metrics['trades_won'] = metrics.get('trades_won', 0) + 1
                     metrics['last_trade'] = {
                         'type': 'sell',
                         'time': datetime.utcnow(),
