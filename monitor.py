@@ -176,6 +176,14 @@ def logs_api():
     except Exception as e:
         return jsonify({'logs': f'Error reading log file: {e}'})
 
+@app.route("/btc_chart")
+def btc_chart():
+    chart_path = os.path.join("metrics", "charts", "btc_chart_live.html")
+    if not os.path.exists(chart_path):
+        return "<div style='color:red'>No chart available. Run save_btc_chart_live.py first.</div>"
+    with open(chart_path, "r", encoding="utf-8") as f:
+        return f.read()
+
 @app.route("/")
 def dashboard():
     usd_balance = get_account_balance() or 0
@@ -203,13 +211,41 @@ TEMPLATE = '''
     <title>CryptoBot Monitor</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { background: #181a1b; color: #e0e6ed; }
-        .card { background: #23272f; color: #e0e6ed; border: none; }
+        body { background: #181a1b; color: #f3f6fa; }
+        .card { background: #23272f; color: #f3f6fa; border: none; }
         .table-dark { --bs-table-bg: #23272f; }
         .navbar { background: linear-gradient(90deg, #181a1b 0%, #23272f 100%); border-bottom: 1px solid #2d323c; }
-        .section-title { margin-top: 2rem; margin-bottom: 1rem; font-size: 1.3rem; color: #7fd7ff; letter-spacing: 1px; text-shadow: 0 1px 8px #000; }
-        .card-title { color: #7fd7ff; font-weight: bold; letter-spacing: 0.5px; }
-        .display-6 { font-weight: bold; color: #f8fafc; }
+        .section-title {
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+            font-size: 1.7rem;
+            color: #fff;
+            font-weight: 900;
+            letter-spacing: 1px;
+            text-shadow: 0 2px 12px #007acc99, 0 1px 8px #000;
+            text-transform: uppercase;
+            display: flex;
+            align-items: center;
+            gap: 0.5em;
+        }
+        .section-title .icon {
+            font-size: 1.5em;
+            margin-right: 0.3em;
+        }
+        .card-title {
+            color: #7fd7ff;
+            font-weight: bold;
+            letter-spacing: 0.5px;
+            font-size: 1.2rem;
+            text-shadow: 0 1px 8px #007acc44;
+            display: flex;
+            align-items: center;
+            gap: 0.4em;
+        }
+        .card-title .icon {
+            font-size: 1.1em;
+        }
+        .display-6 { font-weight: bold; color: #fff; }
         .text-success { color: #4ade80 !important; }
         .text-danger { color: #f87171 !important; }
         .text-secondary { color: #a5b4fc !important; }
@@ -226,11 +262,19 @@ TEMPLATE = '''
         .card .card-text { font-size: 1.3rem; }
         .badge.bg-success { font-size: 1em; }
         .row.g-4 { row-gap: 1.5rem; }
-        .table-dark { color: #e0e6ed; }
+        .table-dark { color: #f3f6fa; }
         .table-dark tr { background: #23272f; }
-        .table-dark th { color: #7fd7ff; }
-        .table-dark td { color: #e0e6ed; }
+        .table-dark th { color: #7fd7ff; font-size: 1.1em; font-weight: 700; }
+        .table-dark td { color: #f3f6fa; }
         .alert-danger { background: #2d323c; color: #f87171; border: none; }
+        .icon-btc { color: #f7931a; }
+        .icon-usd { color: #4ade80; }
+        .icon-profit { color: #4ade80; }
+        .icon-loss { color: #f87171; }
+        .icon-trade { color: #7fd7ff; }
+        .icon-server { color: #a5b4fc; }
+        .icon-paper { color: #ffd700; }
+        .icon-logs { color: #ffb300; }
     </style>
 </head>
 <body>
@@ -240,6 +284,17 @@ TEMPLATE = '''
     <span class="text-secondary" id="now">{{ now }}</span>
   </div>
 </nav>
+<div class="container py-4">
+  <div class="row">
+    <div class="col">
+      <div class="card shadow mb-4">
+        <div class="card-body">
+          <iframe src="/btc_chart" width="100%" height="750" style="border:none;background:#181a1b;"></iframe>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 <div class="container py-4" id="metrics-root">
   <!-- All metrics content will be rendered here by JS -->
 </div>
@@ -252,11 +307,11 @@ function renderTradeTable(trades) {
   let html = '<table class="table table-dark table-striped"><thead><tr><th>Type</th><th>Price</th><th>Volume</th><th>Time</th><th>P/L</th></tr></thead><tbody>';
   for (const t of trades) {
     html += `<tr>
-      <td>${t.type ? t.type.toUpperCase() : ''}</td>
+      <td>${t.type ? (t.type.toLowerCase() === 'buy' ? '<span class="icon icon-trade">&#128200;</span> ' : '<span class="icon icon-trade">&#128201;</span> ') + t.type.toUpperCase() : ''}</td>
       <td>$${Number(t.price).toFixed(2)}</td>
       <td>${t.volume}</td>
       <td>${t.time ? t.time.replace('T',' ').slice(0,19) : ''}</td>
-      <td>${t.profit !== undefined ? (t.profit >= 0 ? `<span class='text-success'>$${Number(t.profit).toFixed(2)}</span>` : `<span class='text-danger'>$${Number(t.profit).toFixed(2)}</span>`) : ''}</td>
+      <td>${t.profit !== undefined ? (t.profit >= 0 ? `<span class='icon icon-profit'>&#x1F4B0;</span> <span class='text-success'>$${Number(t.profit).toFixed(2)}</span>` : `<span class='icon icon-loss'>&#x1F4B8;</span> <span class='text-danger'>$${Number(t.profit).toFixed(2)}</span>`) : ''}</td>
     </tr>`;
   }
   html += '</tbody></table>';
@@ -265,36 +320,36 @@ function renderTradeTable(trades) {
 function renderMetrics(data) {
   // Live Trading Metrics
   let html = `
-  <div class="section-title">Live Trading Metrics</div>
+  <div class="section-title"><span class="icon icon-btc">&#128181;</span>Live Trading Metrics</div>
   <div class="row g-4">
     <div class="col-md-4">
       <div class="card shadow"><div class="card-body">
-        <h5 class="card-title">USD Balance</h5>
+        <h5 class="card-title"><span class="icon icon-usd">&#36;</span>USD Balance</h5>
         <p class="card-text display-6">$${data.usd_balance.toFixed(2)}</p>
       </div></div>
     </div>
     <div class="col-md-4">
       <div class="card shadow"><div class="card-body">
-        <h5 class="card-title">BTC Balance</h5>
+        <h5 class="card-title"><span class="icon icon-btc">&#x20BF;</span>BTC Balance</h5>
         <p class="card-text display-6">${data.btc_balance.toFixed(6)} BTC</p>
       </div></div>
     </div>
     <div class="col-md-4">
       <div class="card shadow"><div class="card-body">
-        <h5 class="card-title">BTC/USD Price</h5>
+        <h5 class="card-title"><span class="icon icon-btc">&#128176;</span>BTC/USD Price</h5>
         <p class="card-text display-6">$${data.price.toFixed(2)}</p>
       </div></div>
     </div>
   </div>
   <div class="row mt-4"><div class="col"><div class="card shadow"><div class="card-body">
-    <h5 class="card-title">Current Position</h5>
+    <h5 class="card-title"><span class="icon icon-trade">&#128200;</span>Current Position</h5>
     `;
   if (data.position) {
     html += `<table class="table table-dark table-striped">
       <tr><th>Type</th><td>${data.position.type || 'auto'}</td></tr>
       <tr><th>Volume</th><td>${data.position.volume}</td></tr>
       <tr><th>Entry Price</th><td>$${data.position.entry_price}</td></tr>
-      <tr><th>P/L</th><td>${data.pl >= 0 ? `<span class='text-success'>$${data.pl.toFixed(2)}</span>` : `<span class='text-danger'>$${data.pl.toFixed(2)}</span>`}</td></tr>
+      <tr><th>P/L</th><td>${data.pl >= 0 ? `<span class='icon icon-profit'>&#x1F4B0;</span> <span class='text-success'>$${data.pl.toFixed(2)}</span>` : `<span class='icon icon-loss'>&#x1F4B8;</span> <span class='text-danger'>$${data.pl.toFixed(2)}</span>`}</td></tr>
     </table>`;
   } else {
     html += `<p class="text-secondary">No open position</p>`;
@@ -307,42 +362,42 @@ function renderMetrics(data) {
   html += `</div></div></div></div>`;
 
   // Live Paper Metrics
-  html += `<div class="section-title">Live Paper Metrics</div>
+  html += `<div class="section-title"><span class="icon icon-paper">&#128196;</span>Live Paper Metrics</div>
   <div class="row g-4">
     <div class="col-md-4">
       <div class="card shadow"><div class="card-body">
-        <h5 class="card-title">Balance</h5>
+        <h5 class="card-title"><span class="icon icon-usd">&#36;</span>Balance</h5>
         <p class="card-text display-6">$${data.paper.balance.toFixed(2)}</p>
       </div></div>
     </div>
     <div class="col-md-4">
       <div class="card shadow"><div class="card-body">
-        <h5 class="card-title">Executed Trades</h5>
+        <h5 class="card-title"><span class="icon icon-trade">&#128200;</span>Executed Trades</h5>
         <p class="card-text display-6">${data.paper.total_trades}</p>
       </div></div>
     </div>
     <div class="col-md-4">
       <div class="card shadow"><div class="card-body">
-        <h5 class="card-title">Total Profit</h5>
+        <h5 class="card-title"><span class="icon icon-profit">&#x1F4B0;</span>Total Profit</h5>
         <p class="card-text display-6">$${data.paper.total_profit.toFixed(2)}</p>
       </div></div>
     </div>
   </div>
   <div class="row mt-4"><div class="col"><div class="card shadow"><div class="card-body">
-    <h5 class="card-title">Current Position</h5>
+    <h5 class="card-title"><span class="icon icon-trade">&#128200;</span>Current Position</h5>
     `;
   if (data.paper.open_position) {
     html += `<table class="table table-dark table-striped">
       <tr><th>Volume</th><td>${data.paper.open_position.volume}</td></tr>
       <tr><th>Entry Price</th><td>$${data.paper.open_position.entry_price}</td></tr>
-      <tr><th>P/L</th><td>${data.paper.pl_unrealized >= 0 ? `<span class='text-success'>$${data.paper.pl_unrealized.toFixed(2)}</span>` : `<span class='text-danger'>$${data.paper.pl_unrealized.toFixed(2)}</span>`}</td></tr>
+      <tr><th>P/L</th><td>${data.paper.pl_unrealized >= 0 ? `<span class='icon icon-profit'>&#x1F4B0;</span> <span class='text-success'>$${data.paper.pl_unrealized.toFixed(2)}</span>` : `<span class='icon icon-loss'>&#x1F4B8;</span> <span class='text-danger'>$${data.paper.pl_unrealized.toFixed(2)}</span>`}</td></tr>
     </table>`;
   } else {
     html += `<p class="text-secondary">No open position</p>`;
   }
   html += `<div class="mt-3"><strong>Last trade:</strong> `;
   if (data.paper.last_trade) {
-    html += `${data.paper.last_trade.type.toUpperCase()} ${data.paper.last_trade.volume} @ $${data.paper.last_trade.price} (${data.paper.last_trade.time}) | P/L: ${data.paper.last_trade.profit >= 0 ? `<span class='text-success'>$${Number(data.paper.last_trade.profit).toFixed(2)}</span>` : `<span class='text-danger'>$${Number(data.paper.last_trade.profit).toFixed(2)}</span>`}`;
+    html += `${data.paper.last_trade.type.toUpperCase()} ${data.paper.last_trade.volume} @ $${data.paper.last_trade.price} (${data.paper.last_trade.time}) | P/L: ${data.paper.last_trade.profit >= 0 ? `<span class='icon icon-profit'>&#x1F4B0;</span> <span class='text-success'>$${Number(data.paper.last_trade.profit).toFixed(2)}</span>` : `<span class='icon icon-loss'>&#x1F4B8;</span> <span class='text-danger'>$${Number(data.paper.last_trade.profit).toFixed(2)}</span>`}`;
   } else {
     html += `N/A`;
   }
@@ -353,29 +408,29 @@ function renderMetrics(data) {
   html += `</div></div></div></div>`;
 
   // Server/Bot Metrics
-  html += `<div class="section-title">Server & Bot Status Metrics</div>
+  html += `<div class="section-title"><span class="icon icon-server">&#128187;</span>Server & Bot Status Metrics</div>
   <div class="row g-4">
     <div class="col-md-4">
       <div class="card shadow"><div class="card-body">
-        <h5 class="card-title">Flask Uptime</h5>
+        <h5 class="card-title"><span class="icon icon-server">&#9200;</span>Flask Uptime</h5>
         <p class="card-text display-6">${Math.floor(data.server.flask_uptime/3600)}h ${Math.floor((data.server.flask_uptime%3600)/60)}m</p>
       </div></div>
     </div>
     <div class="col-md-4">
       <div class="card shadow"><div class="card-body">
-        <h5 class="card-title">CPU</h5>
+        <h5 class="card-title"><span class="icon icon-server">&#9881;&#65039;</span>CPU</h5>
         <p class="card-text display-6">${data.server.cpu_percent}%</p>
       </div></div>
     </div>
     <div class="col-md-4">
       <div class="card shadow"><div class="card-body">
-        <h5 class="card-title">RAM</h5>
+        <h5 class="card-title"><span class="icon icon-server">&#128421;&#65039;</span>RAM</h5>
         <p class="card-text display-6">${data.server.ram_percent}%</p>
       </div></div>
     </div>
   </div>
   <div class="row mt-4"><div class="col"><div class="card shadow"><div class="card-body">
-    <h5 class="card-title">System</h5>
+    <h5 class="card-title"><span class="icon icon-server">&#128187;</span>System</h5>
     <p class="card-text">${data.server.platform}</p>
     <div class="mt-2"><strong>Bot Status:</strong> <span class="badge bg-success">Running</span></div>
   </div></div></div></div>`;
@@ -393,7 +448,7 @@ async function fetchMetrics() {
   }
 }
 function renderLogs(logs) {
-  let html = `<div class='section-title'>Last Logs</div><pre style='background:#181a1b;color:#f8e6ed;padding:1em;border-radius:8px;max-height:350px;overflow:auto;font-size:0.95em;'>${logs}</pre>`;
+  let html = `<div class='section-title'><span class='icon icon-logs'>&#128221;</span>Last Logs</div><pre style='background:#181a1b;color:#f8e6ed;padding:1em;border-radius:8px;max-height:350px;overflow:auto;font-size:0.95em;'>${logs}</pre>`;
   document.getElementById('logs-root').innerHTML = html;
 }
 async function fetchLogs() {

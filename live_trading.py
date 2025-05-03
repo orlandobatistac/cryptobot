@@ -1,13 +1,11 @@
 import os
 import sys
 import time
-import threading
 import logging
 import signal
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
-import pandas as pd
 import krakenex
 from strategy import Strategy
 from logger import logger
@@ -36,7 +34,6 @@ STRATEGY_CONFIG = CONFIG["strategy"]
 GENERAL_CONFIG = CONFIG["general"]
 
 PAIR = "XXBTZUSD"
-INTERVAL = CONFIG["data"].get("interval", "1D")
 TRADE_FEE = GENERAL_CONFIG.get("trade_fee", 0.0026)
 INVESTMENT_FRACTION = GENERAL_CONFIG.get("investment_fraction", 1.0)
 MIN_TRADE_SIZE = 0.0001  # Minimum trade size - you can adjust per pair
@@ -180,15 +177,6 @@ def main():
     logger.info("Starting LIVE trading mode (REAL MONEY).")
     strategy = Strategy()
     position = None
-    last_evaluated_candle = None
-    interval = INTERVAL
-    interval_seconds = {
-        '1D': 24 * 60 * 60,
-        '4H': 4 * 60 * 60,
-        '1W': 7 * 24 * 60 * 60,
-        '1H': 60 * 60,
-        '60min': 60 * 60,
-    }.get(interval, 24 * 60 * 60)
     global metrics
     
     while RUNNING:
@@ -204,102 +192,77 @@ def main():
                 metrics['max_drawdown'] = dd
         print_trade_status(balance, btc_balance, realtime_price, position)
         print_metrics(metrics, position, realtime_price)
-        # --- Automatic strategy only if there is a new candle ---
-        try:
-            df = pd.read_parquet(os.path.join(os.path.dirname(__file__), "data", "ohlc_data_60min_all_years.parquet"))
-            df["Timestamp"] = pd.to_datetime(df["Timestamp"])
-            df.set_index("Timestamp", inplace=True)
-            now = datetime.now()
-            df_resampled = df.resample(interval, closed='left', label='left').agg({
-                'Open': 'first',
-                'High': 'max',
-                'Low': 'min',
-                'Close': 'last',
-                'Volume': 'sum'
-            })
-            data_valid = df_resampled[df_resampled.index <= now]
-            if not data_valid.empty:
-                last_candle = data_valid.iloc[-1]
-                last_candle_time = last_candle.name
+        # --- Automatic strategy ---
+        strategy.calculate_indicators(None)  # No data update
+        # ENTRY
+        if not position and strategy.entry_signal(None, None, is_backtest=False):
+            print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Entry signal detected.")
+            invest_amount = balance * INVESTMENT_FRACTION
+            if invest_amount < 10:  # Kraken minimum for BTC/USD
+                print("[WARN] Investment amount too small for real trade.")
+                logger.warning("Investment amount too small for real trade.")
             else:
-                last_candle_time = None
-        except Exception as e:
-            logger.error(f"Error loading or resampling data: {e}")
-            time.sleep(60)
-            continue
-        # Only trade if there is a new candle
-        if last_candle_time is not None and last_candle_time != last_evaluated_candle:
-            last_evaluated_candle = last_candle_time
-            strategy.calculate_indicators(df_resampled)
-            # ENTRY
-            if not position and strategy.entry_signal(last_candle, data_valid, is_backtest=False):
-                print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Entry signal detected.")
-                invest_amount = balance * INVESTMENT_FRACTION
-                if invest_amount < 10:  # Kraken minimum for BTC/USD
-                    print("[WARN] Investment amount too small for real trade.")
-                    logger.warning("Investment amount too small for real trade.")
+                volume = invest_amount / realtime_price
+                if volume < MIN_TRADE_SIZE:
+                    print("[WARN] Volume below minimum trade size.")
+                    logger.warning("Volume below minimum trade size.")
                 else:
-                    volume = invest_amount / realtime_price
-                    if volume < MIN_TRADE_SIZE:
-                        print("[WARN] Volume below minimum trade size.")
-                        logger.warning("Volume below minimum trade size.")
+                    txid = place_order('buy', PAIR, volume)
+                    if txid:
+                        print(f"[LIVE] Buy order placed. Waiting for confirmation...")
+                        # Wait for confirmation
+                        for _ in range(10):
+                            status = check_order_status(txid)
+                            if status == 'closed':
+                                print(f"[LIVE] Buy order filled.")
+                                break
+                            time.sleep(5)
+                        position = {
+                            'entry_price': realtime_price,
+                            'volume': volume,
+                            'entry_time': datetime.utcnow()
+                        }
+                        # Update trade metrics
+                        metrics['trades_executed'] += 1
+                        if 'trades_won' not in metrics:
+                            metrics['trades_won'] = 0
+                        metrics['last_trade'] = {
+                            'type': 'buy',
+                            'time': datetime.utcnow(),
+                            'price': realtime_price,
+                            'volume': volume
+                        }
                     else:
-                        txid = place_order('buy', PAIR, volume)
-                        if txid:
-                            print(f"[LIVE] Buy order placed. Waiting for confirmation...")
-                            # Wait for confirmation
-                            for _ in range(10):
-                                status = check_order_status(txid)
-                                if status == 'closed':
-                                    print(f"[LIVE] Buy order filled.")
-                                    break
-                                time.sleep(5)
-                            position = {
-                                'entry_price': realtime_price,
-                                'volume': volume,
-                                'entry_time': datetime.utcnow()
-                            }
-                            # Update trade metrics
-                            metrics['trades_executed'] += 1
-                            if 'trades_won' not in metrics:
-                                metrics['trades_won'] = 0
-                            metrics['last_trade'] = {
-                                'type': 'buy',
-                                'time': datetime.utcnow(),
-                                'price': realtime_price,
-                                'volume': volume
-                            }
-                        else:
-                            print("[ERROR] Failed to place buy order.")
-            # EXIT
-            elif position and strategy.exit_signal(last_candle, data_valid, is_backtest=False):
-                print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Exit signal detected.")
-                txid = place_order('sell', PAIR, position['volume'])
-                if txid:
-                    print(f"[LIVE] Sell order placed. Waiting for confirmation...")
-                    for _ in range(10):
-                        status = check_order_status(txid)
-                        if status == 'closed':
-                            print(f"[LIVE] Sell order filled.")
-                            break
-                        time.sleep(5)
-                    # Update trade metrics and realized profit
-                    profit = (realtime_price - position['entry_price']) * position['volume']
-                    metrics['total_profit'] += profit
-                    metrics['trades_executed'] += 1
-                    if profit > 0:
-                        metrics['trades_won'] = metrics.get('trades_won', 0) + 1
-                    metrics['last_trade'] = {
-                        'type': 'sell',
-                        'time': datetime.utcnow(),
-                        'price': realtime_price,
-                        'volume': position['volume']
-                    }
-                    position = None
-                else:
-                    print("[ERROR] Failed to place sell order.")
+                        print("[ERROR] Failed to place buy order.")
+        # EXIT
+        elif position and strategy.exit_signal(None, None, is_backtest=False):
+            print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Exit signal detected.")
+            txid = place_order('sell', PAIR, position['volume'])
+            if txid:
+                print(f"[LIVE] Sell order placed. Waiting for confirmation...")
+                for _ in range(10):
+                    status = check_order_status(txid)
+                    if status == 'closed':
+                        print(f"[LIVE] Sell order filled.")
+                        break
+                    time.sleep(5)
+                # Update trade metrics and realized profit
+                profit = (realtime_price - position['entry_price']) * position['volume']
+                metrics['total_profit'] += profit
+                metrics['trades_executed'] += 1
+                if profit > 0:
+                    metrics['trades_won'] = metrics.get('trades_won', 0) + 1
+                metrics['last_trade'] = {
+                    'type': 'sell',
+                    'time': datetime.utcnow(),
+                    'price': realtime_price,
+                    'volume': position['volume']
+                }
+                position = None
+            else:
+                print("[ERROR] Failed to place sell order.")
         else:
-            print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Waiting for new candle to evaluate strategy...\n")
+            print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Waiting for strategy evaluation...\n")
         time.sleep(60)
 
 if __name__ == "__main__":

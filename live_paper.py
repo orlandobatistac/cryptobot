@@ -1,4 +1,4 @@
-import signal, functools, os, time, sqlite3, json, subprocess, threading, sys
+import signal, functools, os, time, sqlite3, json, threading, sys
 from collections import deque
 import pandas as pd, requests
 from datetime import datetime, timedelta
@@ -317,28 +317,6 @@ def get_open_position():
             }
         return None
 
-def update_parquet():
-    """
-    Update the Parquet file by running update_data.py.
-    """
-    update_script = os.path.join("data", "update_data.py")
-    if not os.path.isfile(update_script):
-        logger.warning(f"update_data.py not found at {update_script}. Skipping price update.")
-        print(f"Warning: update_data.py not found at {update_script}. Skipping price update.")
-        return
-    print("Updating prices...")
-    try:
-        result = subprocess.run(
-            [sys.executable, update_script],
-            check=True,
-            capture_output=True,
-            text=True
-        )
-        logger.info(f"update_data.py output: {result.stdout}")
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Error running update_data.py: {e.stderr}")
-        print(f"Warning: Failed to update parquet data: {e.stderr}")
-
 @retry((requests.ConnectionError, requests.Timeout), tries=3, delay=2, backoff=2, logger=logger)
 def get_realtime_price(pair):
     """
@@ -569,73 +547,10 @@ def main():
         '60min': 60 * 60,
     }.get(interval, 24 * 60 * 60)  # Default to 1D if interval not recognized
 
-    # Try to load existing data at startup
-    df_resampled = None
-    try:
-        df = pd.read_parquet(os.path.join(BASE_DIR, "data", "ohlc_data_60min_all_years.parquet"))
-        df["Timestamp"] = pd.to_datetime(df["Timestamp"])
-        df.set_index("Timestamp", inplace=True)
-        start_time = df.index.min().floor(interval)
-        end_time = pd.Timestamp(datetime.utcnow()).floor(interval)
-        time_range = pd.date_range(start=start_time, end=end_time, freq=interval)
-        df_resampled = df.resample(interval, closed='left', label='left').agg({
-            'Open': 'first',
-            'High': 'max',
-            'Low': 'min',
-            'Close': 'last',
-            'Volume': 'sum'
-        })
-        # Do not drop NA to keep the most recent candles
-        # df_resampled = df_resampled.dropna()
-    except Exception as e:
-        logger.error(f"Initial load of parquet data failed: {e}")
-        print(f"Warning: Unable to load initial parquet data: {e}. Continuing without data.")
-
     try:
         while RUNNING:
             cycle += 1
             current_time = pd.Timestamp(datetime.utcnow())
-            # Update parquet with new 60min candles
-            update_parquet()
-
-            # Load data from parquet file
-            try:
-                df = pd.read_parquet(os.path.join(BASE_DIR, "data", "ohlc_data_60min_all_years.parquet"))
-                df["Timestamp"] = pd.to_datetime(df["Timestamp"])
-                df.set_index("Timestamp", inplace=True)
-                # Resample to the configured interval (e.g., '1D')
-                start_time = df.index.min().floor(interval)
-                end_time = current_time.floor(interval)
-                time_range = pd.date_range(start=start_time, end=end_time, freq=interval)
-                df_resampled = df.resample(interval, closed='left', label='left').agg({
-                    'Open': 'first',
-                    'High': 'max',
-                    'Low': 'min',
-                    'Close': 'last',
-                    'Volume': 'sum'
-                })
-
-                # Include partial candle for the current day
-                last_full_candle = df_resampled.index[-1] if not df_resampled.empty else end_time
-                if df.index.max() > last_full_candle:
-                    partial_data = df[df.index > last_full_candle]
-                    if not partial_data.empty:
-                        partial_candle = pd.DataFrame({
-                            'Open': [partial_data['Open'].iloc[0]],
-                            'High': [partial_data['High'].max()],
-                            'Low': [partial_data['Low'].min()],
-                            'Close': [partial_data['Close'].iloc[-1]],
-                            'Volume': [partial_data['Volume'].sum()]
-                        }, index=[last_full_candle + pd.Timedelta(seconds=interval_seconds)])
-                        df_resampled = pd.concat([df_resampled, partial_candle])
-            except Exception as e:
-                logger.error(f"Error loading parquet data: {e}")
-                print(f"Warning: error loading parquet data: {e}. Using last known data if available.")
-                if df_resampled is None:
-                    print("No previous data available. Skipping cycle.")
-                    time.sleep(INTERVAL * 60)
-                    continue
-
             clear_console()
             for line in initial_summary:
                 print(line)
@@ -644,24 +559,14 @@ def main():
 
             # --- AUTO STRATEGY EVALUATION SOLO SI HAY NUEVA VELA ---
             # Detectar la última vela disponible
-            if not df_resampled.empty:
-                now = datetime.now()
-                data_valid = df_resampled[df_resampled.index <= now]
-                if not data_valid.empty:
-                    last_candle = data_valid.iloc[-1]
-                    last_candle_time = last_candle.name
-                else:
-                    last_candle_time = None
-            else:
-                last_candle_time = None
+            last_candle_time = current_time.floor(interval)
 
             # Solo evaluar si hay una nueva vela
             if last_candle_time is not None and last_candle_time != last_evaluated_candle:
                 last_evaluated_candle = last_candle_time
                 print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Evaluating strategy (new candle)...\n")
-                strategy.calculate_indicators(df_resampled)
                 auto_action = None
-                if not position and strategy.entry_signal(last_candle, data_valid, is_backtest=False):
+                if not position and strategy.entry_signal(None, None, is_backtest=False):
                     auto_action = 'buy'
                     print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Entry signal detected.")
                     # Use real-time price for buying
@@ -685,7 +590,7 @@ def main():
                         }
                         print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Auto BUY: {volume:.6f} BTC @ ${auto_price:,.2f}")
                 # Auto SELL
-                elif position and strategy.exit_signal(last_candle, data_valid, is_backtest=False):
+                elif position and strategy.exit_signal(None, None, is_backtest=False):
                     auto_action = 'sell'
                     print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Exit signal detected.")
                     # Use real-time price for selling
