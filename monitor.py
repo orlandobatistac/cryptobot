@@ -58,17 +58,22 @@ def get_position():
     return None
 
 def get_live_trading_metrics():
-    # TODO: Replace with real data source if available
-    # Dummy example for last 5 trades
+    uptime = int(time.time() - SERVER_START)
     return {
+        'total_profit': 0.0,
+        'pl_unrealized': 0.0,
         'last_trade': 'N/A',
         'win_rate': 0,
-        'uptime': 0,
+        'uptime': uptime,
         'last_5_trades': []
     }
 
 # --- LIVE_PAPER METRICS ---
 def get_live_paper_metrics():
+    config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = json.load(f)
+    initial_capital = config.get('general', {}).get('initial_capital', 10000)
     db_path = os.path.join(os.path.dirname(__file__), 'paper_trades.db')
     metrics = {
         'total_trades': 0,
@@ -131,6 +136,9 @@ def get_live_paper_metrics():
         conn.close()
     except Exception:
         pass
+    # Si no hay trades y el balance es 0, mostrar el initial_capital
+    if metrics['total_trades'] == 0 and metrics['balance'] == 0:
+        metrics['balance'] = initial_capital
     return metrics
 
 # --- SYSTEM METRICS ---
@@ -146,7 +154,6 @@ def get_server_metrics():
 @app.route("/metrics")
 def metrics_api():
     usd_balance = get_account_balance() or 0
-    btc_balance = get_asset_balance() or 0
     price = get_realtime_price(PAIR) or 0
     position = get_position()
     pl = 0
@@ -157,8 +164,6 @@ def metrics_api():
     live_trading = get_live_trading_metrics()
     return jsonify({
         'usd_balance': usd_balance,
-        'btc_balance': btc_balance,
-        'price': price,
         'position': position,
         'pl': pl,
         'paper': paper,
@@ -408,7 +413,6 @@ def btc_chart():
 @app.route("/")
 def dashboard():
     usd_balance = get_account_balance() or 0
-    btc_balance = get_asset_balance() or 0
     price = get_realtime_price(PAIR) or 0
     position = get_position()
     pl = 0
@@ -419,7 +423,7 @@ def dashboard():
     # Server metrics
     server = get_server_metrics()
     return render_template_string(TEMPLATE, 
-        usd_balance=usd_balance, btc_balance=btc_balance, price=price, position=position, pl=pl,
+        usd_balance=usd_balance, position=position, pl=pl,
         paper=paper, server=server, now=server['now']
     )
 
@@ -529,10 +533,10 @@ function renderTradeTable(trades) {
   for (const t of trades) {
     html += `<tr>
       <td>${t.type ? (t.type.toLowerCase() === 'buy' ? '<span class="icon icon-trade">&#128200;</span> ' : '<span class="icon icon-trade">&#128201;</span> ') + t.type.toUpperCase() : ''}</td>
-      <td>$${Number(t.price).toFixed(2)}</td>
+      <td>$${Number(t.price).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
       <td>${t.volume}</td>
       <td>${t.time ? t.time.replace('T',' ').slice(0,19) : ''}</td>
-      <td>${t.profit !== undefined ? (t.profit >= 0 ? `<span class='icon icon-profit'>&#x1F4B0;</span> <span class='text-success'>$${Number(t.profit).toFixed(2)}</span>` : `<span class='icon icon-loss'>&#x1F4B8;</span> <span class='text-danger'>$${Number(t.profit).toFixed(2)}</span>`) : ''}</td>
+      <td>${t.profit !== undefined ? (t.profit >= 0 ? `<span class='icon icon-profit'>&#x1F4B0;</span> <span class='text-success'>$${Number(t.profit).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</span>` : `<span class='icon icon-loss'>&#x1F4B8;</span> <span class='text-danger'>$${Number(t.profit).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</span>`) : ''}</td>
     </tr>`;
   }
   html += '</tbody></table>';
@@ -546,19 +550,19 @@ function renderMetrics(data) {
     <div class="col-md-4">
       <div class="card shadow"><div class="card-body">
         <h5 class="card-title"><span class="icon icon-usd">&#36;</span>USD Balance</h5>
-        <p class="card-text display-6">$${data.usd_balance.toFixed(2)}</p>
+        <p class="card-text display-6">$${Number(data.usd_balance).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
       </div></div>
     </div>
     <div class="col-md-4">
       <div class="card shadow"><div class="card-body">
-        <h5 class="card-title"><span class="icon icon-btc">&#x20BF;</span>BTC Balance</h5>
-        <p class="card-text display-6">${data.btc_balance.toFixed(6)} BTC</p>
+        <h5 class="card-title"><span class="icon icon-profit">&#x1F4B0;</span>Total Profit</h5>
+        <p class="card-text display-6">$${Number(data.live_trading.total_profit).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
       </div></div>
     </div>
     <div class="col-md-4">
       <div class="card shadow"><div class="card-body">
-        <h5 class="card-title"><span class="icon icon-btc">&#128176;</span>BTC/USD Price</h5>
-        <p class="card-text display-6">$${data.price.toFixed(2)}</p>
+        <h5 class="card-title"><span class="icon icon-trade">&#128200;</span>P/L</h5>
+        <p class="card-text display-6">$${Number(data.live_trading.pl_unrealized).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
       </div></div>
     </div>
   </div>
@@ -569,13 +573,13 @@ function renderMetrics(data) {
     html += `<table class="table table-dark table-striped">
       <tr><th>Type</th><td>${data.position.type || 'auto'}</td></tr>
       <tr><th>Volume</th><td>${data.position.volume}</td></tr>
-      <tr><th>Entry Price</th><td>$${data.position.entry_price}</td></tr>
-      <tr><th>P/L</th><td>${data.pl >= 0 ? `<span class='icon icon-profit'>&#x1F4B0;</span> <span class='text-success'>$${data.pl.toFixed(2)}</span>` : `<span class='icon icon-loss'>&#x1F4B8;</span> <span class='text-danger'>$${data.pl.toFixed(2)}</span>`}</td></tr>
+      <tr><th>Entry Price</th><td>$${Number(data.position.entry_price).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td></tr>
+      <tr><th>P/L</th><td>${data.pl >= 0 ? `<span class='icon icon-profit'>&#x1F4B0;</span> <span class='text-success'>$${Number(data.pl).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</span>` : `<span class='icon icon-loss'>&#x1F4B8;</span> <span class='text-danger'>$${Number(data.pl).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</span>`}</td></tr>
     </table>`;
   } else {
     html += `<p class="text-secondary">No open position</p>`;
   }
-  html += `<div class="mt-3"><strong>Last trade:</strong> ${data.live_trading.last_trade}</div>`;
+  html += `<div class="mt-3"><strong>Trades:</strong> ${data.live_trading.total_profit !== undefined ? (data.live_trading.total_trades || 0) : 0}</div>`;
   html += `<div class="mt-2"><strong>Win rate:</strong> ${data.live_trading.win_rate}%</div>`;
   html += `<div class="mt-2"><strong>Uptime:</strong> ${Math.floor(data.live_trading.uptime/3600)}h ${Math.floor((data.live_trading.uptime%3600)/60)}m</div>`;
   html += `<div class=\"mt-4\"><strong>Last 5 Trades:</strong></div>`;
@@ -587,20 +591,20 @@ function renderMetrics(data) {
   <div class="row g-4">
     <div class="col-md-4">
       <div class="card shadow"><div class="card-body">
-        <h5 class="card-title"><span class="icon icon-usd">&#36;</span>Balance</h5>
-        <p class="card-text display-6">$${data.paper.balance.toFixed(2)}</p>
-      </div></div>
-    </div>
-    <div class="col-md-4">
-      <div class="card shadow"><div class="card-body">
-        <h5 class="card-title"><span class="icon icon-trade">&#128200;</span>Executed Trades</h5>
-        <p class="card-text display-6">${data.paper.total_trades}</p>
+        <h5 class="card-title"><span class="icon icon-usd">&#36;</span>USD Balance</h5>
+        <p class="card-text display-6">$${Number(data.paper.balance).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
       </div></div>
     </div>
     <div class="col-md-4">
       <div class="card shadow"><div class="card-body">
         <h5 class="card-title"><span class="icon icon-profit">&#x1F4B0;</span>Total Profit</h5>
-        <p class="card-text display-6">$${data.paper.total_profit.toFixed(2)}</p>
+        <p class="card-text display-6">$${Number(data.paper.total_profit).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
+      </div></div>
+    </div>
+    <div class="col-md-4">
+      <div class="card shadow"><div class="card-body">
+        <h5 class="card-title"><span class="icon icon-trade">&#128200;</span>P/L</h5>
+        <p class="card-text display-6">$${Number(data.paper.pl_unrealized).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
       </div></div>
     </div>
   </div>
@@ -610,19 +614,14 @@ function renderMetrics(data) {
   if (data.paper.open_position) {
     html += `<table class="table table-dark table-striped">
       <tr><th>Volume</th><td>${data.paper.open_position.volume}</td></tr>
-      <tr><th>Entry Price</th><td>$${data.paper.open_position.entry_price}</td></tr>
-      <tr><th>P/L</th><td>${data.paper.pl_unrealized >= 0 ? `<span class='icon icon-profit'>&#x1F4B0;</span> <span class='text-success'>$${data.paper.pl_unrealized.toFixed(2)}</span>` : `<span class='icon icon-loss'>&#x1F4B8;</span> <span class='text-danger'>$${data.paper.pl_unrealized.toFixed(2)}</span>`}</td></tr>
+      <tr><th>Entry Price</th><td>$${Number(data.paper.open_position.entry_price).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td></tr>
+      <tr><th>P/L</th><td>${data.paper.pl_unrealized >= 0 ? `<span class='icon icon-profit'>&#x1F4B0;</span> <span class='text-success'>$${Number(data.paper.pl_unrealized).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</span>` : `<span class='icon icon-loss'>&#x1F4B8;</span> <span class='text-danger'>$${Number(data.paper.pl_unrealized).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</span>`}</td></tr>
     </table>`;
   } else {
     html += `<p class="text-secondary">No open position</p>`;
   }
-  html += `<div class="mt-3"><strong>Last trade:</strong> `;
-  if (data.paper.last_trade) {
-    html += `${data.paper.last_trade.type.toUpperCase()} ${data.paper.last_trade.volume} @ $${data.paper.last_trade.price} (${data.paper.last_trade.time}) | P/L: ${data.paper.last_trade.profit >= 0 ? `<span class='icon icon-profit'>&#x1F4B0;</span> <span class='text-success'>$${Number(data.paper.last_trade.profit).toFixed(2)}</span>` : `<span class='icon icon-loss'>&#x1F4B8;</span> <span class='text-danger'>$${Number(data.paper.last_trade.profit).toFixed(2)}</span>`}`;
-  } else {
-    html += `N/A`;
-  }
-  html += `</div><div class="mt-2"><strong>Win rate:</strong> ${data.paper.win_rate.toFixed(2)}%</div>`;
+  html += `<div class="mt-3"><strong>Trades:</strong> ${data.paper.total_trades || 0}</div>`;
+  html += `<div class="mt-2"><strong>Win rate:</strong> ${data.paper.win_rate.toFixed(2)}%</div>`;
   html += `<div class="mt-2"><strong>Uptime:</strong> ${Math.floor(data.paper.uptime/3600)}h ${Math.floor((data.paper.uptime%3600)/60)}m</div>`;
   html += `<div class=\"mt-4\"><strong>Last 5 Trades:</strong></div>`;
   html += renderTradeTable(data.paper.last_5_trades);
