@@ -55,12 +55,13 @@ def get_position():
     return None
 
 def get_live_trading_metrics():
-    # Example: you can expand this to read from a file, database, or shared memory if needed
-    # For now, just return N/A or dummy values
+    # TODO: Replace with real data source if available
+    # Dummy example for last 5 trades
     return {
         'last_trade': 'N/A',
         'win_rate': 0,
-        'uptime': 0
+        'uptime': 0,
+        'last_5_trades': []
     }
 
 # --- LIVE_PAPER METRICS ---
@@ -74,7 +75,8 @@ def get_live_paper_metrics():
         'balance': 0.0,
         'open_position': None,
         'pl_unrealized': 0.0,
-        'uptime': 0
+        'uptime': 0,
+        'last_5_trades': []
     }
     try:
         conn = sqlite3.connect(db_path)
@@ -117,6 +119,12 @@ def get_live_paper_metrics():
         if first:
             t0 = datetime.fromisoformat(first[0])
             metrics['uptime'] = (datetime.utcnow() - t0).total_seconds()
+        # Last 5 trades
+        c.execute("SELECT type, price, volume, timestamp, profit FROM trades ORDER BY id DESC LIMIT 5")
+        rows = c.fetchall()
+        metrics['last_5_trades'] = [
+            {'type': r[0], 'price': r[1], 'volume': r[2], 'time': r[3], 'profit': r[4]} for r in rows
+        ]
         conn.close()
     except Exception:
         pass
@@ -195,21 +203,34 @@ TEMPLATE = '''
     <title>CryptoBot Monitor</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { background: #181a1b; color: #f8f9fa; }
-        .card { background: #23272b; color: #f8f9fa; border: none; }
-        .table-dark { --bs-table-bg: #23272b; }
-        .navbar { background: linear-gradient(90deg, #1e2326 0%, #007ACC 100%); }
-        .section-title { margin-top: 2rem; margin-bottom: 1rem; font-size: 1.3rem; color: #FFD700; letter-spacing: 1px; text-shadow: 0 1px 8px #000; }
-        .card-title { color: #00e676; font-weight: bold; letter-spacing: 0.5px; }
-        .display-6 { font-weight: bold; }
-        .text-success { color: #00e676 !important; }
-        .text-danger { color: #ff1744 !important; }
-        .text-secondary { color: #90caf9 !important; }
-        .badge.bg-success { background: linear-gradient(90deg, #00e676 0%, #388e3c 100%); color: #181a1b; }
-        pre { background: #181a1b; color: #FFD700; border: 1px solid #23272b; }
-        .card.shadow { box-shadow: 0 0 16px 0 #007ACC33, 0 2px 4px 0 #000a; }
-        .navbar-brand { color: #FFD700 !important; font-weight: bold; letter-spacing: 1px; }
-        .highlight { color: #FFD700; font-weight: bold; }
+        body { background: #181a1b; color: #e0e6ed; }
+        .card { background: #23272f; color: #e0e6ed; border: none; }
+        .table-dark { --bs-table-bg: #23272f; }
+        .navbar { background: linear-gradient(90deg, #181a1b 0%, #23272f 100%); border-bottom: 1px solid #2d323c; }
+        .section-title { margin-top: 2rem; margin-bottom: 1rem; font-size: 1.3rem; color: #7fd7ff; letter-spacing: 1px; text-shadow: 0 1px 8px #000; }
+        .card-title { color: #7fd7ff; font-weight: bold; letter-spacing: 0.5px; }
+        .display-6 { font-weight: bold; color: #f8fafc; }
+        .text-success { color: #4ade80 !important; }
+        .text-danger { color: #f87171 !important; }
+        .text-secondary { color: #a5b4fc !important; }
+        .badge.bg-success { background: linear-gradient(90deg, #4ade80 0%, #256d4f 100%); color: #181a1b; }
+        pre { background: #181a1b; color: #7fd7ff; border: 1px solid #23272f; }
+        .card.shadow { box-shadow: 0 0 16px 0 #7fd7ff22, 0 2px 4px 0 #000a; }
+        .navbar-brand { color: #7fd7ff !important; font-weight: bold; letter-spacing: 1px; }
+        .highlight { color: #7fd7ff; font-weight: bold; }
+        .card-body { border-radius: 0.5rem; }
+        .card { border-radius: 1rem; }
+        .table-dark th, .table-dark td { border-color: #2d323c; }
+        .card-title, .section-title { text-shadow: 0 2px 8px #181a1b; }
+        .card .card-title { font-size: 1.1rem; }
+        .card .card-text { font-size: 1.3rem; }
+        .badge.bg-success { font-size: 1em; }
+        .row.g-4 { row-gap: 1.5rem; }
+        .table-dark { color: #e0e6ed; }
+        .table-dark tr { background: #23272f; }
+        .table-dark th { color: #7fd7ff; }
+        .table-dark td { color: #e0e6ed; }
+        .alert-danger { background: #2d323c; color: #f87171; border: none; }
     </style>
 </head>
 <body>
@@ -226,6 +247,21 @@ TEMPLATE = '''
   <!-- Logs will be rendered here by JS -->
 </div>
 <script>
+function renderTradeTable(trades) {
+  if (!trades || trades.length === 0) return '<p class="text-secondary">No recent trades</p>';
+  let html = '<table class="table table-dark table-striped"><thead><tr><th>Type</th><th>Price</th><th>Volume</th><th>Time</th><th>P/L</th></tr></thead><tbody>';
+  for (const t of trades) {
+    html += `<tr>
+      <td>${t.type ? t.type.toUpperCase() : ''}</td>
+      <td>$${Number(t.price).toFixed(2)}</td>
+      <td>${t.volume}</td>
+      <td>${t.time ? t.time.replace('T',' ').slice(0,19) : ''}</td>
+      <td>${t.profit !== undefined ? (t.profit >= 0 ? `<span class='text-success'>$${Number(t.profit).toFixed(2)}</span>` : `<span class='text-danger'>$${Number(t.profit).toFixed(2)}</span>`) : ''}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  return html;
+}
 function renderMetrics(data) {
   // Live Trading Metrics
   let html = `
@@ -266,6 +302,8 @@ function renderMetrics(data) {
   html += `<div class="mt-3"><strong>Last trade:</strong> ${data.live_trading.last_trade}</div>`;
   html += `<div class="mt-2"><strong>Win rate:</strong> ${data.live_trading.win_rate}%</div>`;
   html += `<div class="mt-2"><strong>Uptime:</strong> ${Math.floor(data.live_trading.uptime/3600)}h ${Math.floor((data.live_trading.uptime%3600)/60)}m</div>`;
+  html += `<div class=\"mt-4\"><strong>Last 5 Trades:</strong></div>`;
+  html += renderTradeTable(data.live_trading.last_5_trades);
   html += `</div></div></div></div>`;
 
   // Live Paper Metrics
@@ -310,6 +348,8 @@ function renderMetrics(data) {
   }
   html += `</div><div class="mt-2"><strong>Win rate:</strong> ${data.paper.win_rate.toFixed(2)}%</div>`;
   html += `<div class="mt-2"><strong>Uptime:</strong> ${Math.floor(data.paper.uptime/3600)}h ${Math.floor((data.paper.uptime%3600)/60)}m</div>`;
+  html += `<div class=\"mt-4\"><strong>Last 5 Trades:</strong></div>`;
+  html += renderTradeTable(data.paper.last_5_trades);
   html += `</div></div></div></div>`;
 
   // Server/Bot Metrics
@@ -353,7 +393,7 @@ async function fetchMetrics() {
   }
 }
 function renderLogs(logs) {
-  let html = `<div class='section-title'>Last Logs</div><pre style='background:#181a1b;color:#f8f9fa;padding:1em;border-radius:8px;max-height:350px;overflow:auto;font-size:0.95em;'>${logs}</pre>`;
+  let html = `<div class='section-title'>Last Logs</div><pre style='background:#181a1b;color:#f8e6ed;padding:1em;border-radius:8px;max-height:350px;overflow:auto;font-size:0.95em;'>${logs}</pre>`;
   document.getElementById('logs-root').innerHTML = html;
 }
 async function fetchLogs() {
