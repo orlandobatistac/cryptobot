@@ -1,5 +1,6 @@
 import logging
 
+# Logging system
 def setup_logger():
     logger = logging.getLogger("cryptobot")
     if not logger.hasHandlers():

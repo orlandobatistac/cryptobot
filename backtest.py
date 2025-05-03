@@ -320,7 +320,7 @@ class Backtester:
         ax.tick_params(axis='y', labelcolor='#007ACC', labelsize=12)
         ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.6, color='#cccccc')
 
-        # BTCUSD Price, SMA larga y SMA 200
+        # BTCUSD Price, SMA long and SMA 200
         ax2 = ax.twinx()
         ax2.plot(data_to_plot.index, data_to_plot['Close'], label='BTCUSD Price', color='#7f7f7f', linewidth=1.5, alpha=0.9)
         ax2.plot(data_to_plot.index, data_to_plot['SMA'], label=f'SMA ({sma_period})', color='#FFA500', linewidth=2, linestyle='--', alpha=0.9)

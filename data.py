@@ -72,7 +72,7 @@ class DataHandler:
 
         # Filter by date range
         if self.start_date and self.end_date:
-            data = data.sort_index()  # Asegura que el índice esté ordenado
+            data = data.sort_index()  # Ensure the index is sorted
             data = data.loc[self.start_date:self.end_date]
             logger.debug(f"Filtered data date range: {data.index[0]} to {data.index[-1]}")
 

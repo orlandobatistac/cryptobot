@@ -519,9 +519,9 @@ def print_trade_status(cycle, position, balance, realtime_price, trade_fee, sess
 
 def get_min_volume(pair):
     """
-    Devuelve el volumen mínimo permitido para el par dado.
+    Returns the minimum allowed volume for the given pair.
     """
-    # Puedes ajustar este valor según el par o hacerlo configurable
+    # You can adjust this value per pair or make it configurable
     return 0.001
 
 def main():

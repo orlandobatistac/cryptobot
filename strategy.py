@@ -238,14 +238,14 @@ class Strategy:
         :return: True if entry signal is triggered, False otherwise.
         """
         try:
-            # Nueva validación: no procesar velas futuras
+            # New validation: do not process future candles
             now = datetime.datetime.now()
             if isinstance(row.name, pd.Timestamp):
                 row_time = row.name.to_pydatetime()
             else:
                 row_time = row.name
             if row_time > now:
-                logger.warning(f"Intento de evaluar vela futura: {row_time} (hoy: {now})")
+                logger.warning(f"Attempt to evaluate future candle: {row_time} (today: {now})")
                 return False
             if row.get('entry_signal_generated', False) or self.position_open:
                 return False
@@ -324,14 +324,14 @@ class Strategy:
         :return: True if exit signal is triggered, False otherwise.
         """
         try:
-            # Nueva validación: no procesar velas futuras
+            # New validation: do not process future candles
             now = datetime.datetime.now()
             if isinstance(row.name, pd.Timestamp):
                 row_time = row.name.to_pydatetime()
             else:
                 row_time = row.name
             if row_time > now:
-                logger.warning(f"Intento de evaluar vela futura: {row_time} (hoy: {now})")
+                logger.warning(f"Attempt to evaluate future candle: {row_time} (today: {now})")
                 return False
             if row.get('exit_signal_generated', False) or not self.position_open or self.last_entry_time == row.name:
                 return False

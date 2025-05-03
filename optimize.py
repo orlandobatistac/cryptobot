@@ -137,7 +137,7 @@ def run_optimization(callback=None):
     )
     study.optimize(objective, n_trials=n_trials, callbacks=[callback] if callback else None)
     
-    # Guardar resultados
+    # Save results
     os.makedirs(optimization_results_dir, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     file_name = f"best_config_{timestamp}.json"
