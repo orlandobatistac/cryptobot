@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, jsonify
+from flask import Flask, render_template_string, jsonify, Response
 import os
 import sys
 from datetime import datetime
@@ -8,6 +8,9 @@ import sqlite3
 import psutil
 import platform
 import time
+import pandas as pd
+import plotly.graph_objs as go
+import json
 
 # Basic configuration
 app = Flask(__name__)
@@ -176,13 +179,231 @@ def logs_api():
     except Exception as e:
         return jsonify({'logs': f'Error reading log file: {e}'})
 
+@app.route("/btc_chart_data")
+def btc_chart_data():
+    try:
+        df = pd.read_parquet(os.path.join("data", "ohlc_data_60min_all_years.parquet"))
+        df['Timestamp'] = pd.to_datetime(df['Timestamp'])
+        df.set_index('Timestamp', inplace=True)
+        df_1d = df.resample('1D', closed='left', label='left').agg({
+            'Open': 'first',
+            'High': 'max',
+            'Low': 'min',
+            'Close': 'last',
+            'Volume': 'sum'
+        })
+        df_1d = df_1d.dropna()
+        df_1d['EMA9'] = df_1d['Close'].ewm(span=9, adjust=False).mean()
+        df_1d['EMA21'] = df_1d['Close'].ewm(span=21, adjust=False).mean()
+        # Current price
+        last_close = float(df_1d['Close'].iloc[-1]) if not df_1d.empty else None
+        now_price = get_realtime_price(PAIR)
+        # --- Buy/Sell signals ---
+        buy_signals = []
+        sell_signals = []
+        try:
+            db_path = os.path.join(os.path.dirname(__file__), 'paper_trades.db')
+            conn = sqlite3.connect(db_path)
+            c = conn.cursor()
+            c.execute("SELECT type, price, timestamp FROM trades WHERE type IN ('buy', 'sell') ORDER BY timestamp ASC")
+            for ttype, price, ts in c.fetchall():
+                dt = pd.to_datetime(ts).strftime('%Y-%m-%d')
+                if ttype == 'buy':
+                    buy_signals.append({'date': dt, 'price': price})
+                elif ttype == 'sell':
+                    sell_signals.append({'date': dt, 'price': price})
+            conn.close()
+        except Exception as e:
+            pass
+        # Serialize data for Plotly
+        data = {
+            'x': df_1d.index.strftime('%Y-%m-%d').tolist(),
+            'open': df_1d['Open'].tolist(),
+            'high': df_1d['High'].tolist(),
+            'low': df_1d['Low'].tolist(),
+            'close': df_1d['Close'].tolist(),
+            'volume': df_1d['Volume'].tolist(),
+            'ema9': df_1d['EMA9'].tolist(),
+            'ema21': df_1d['EMA21'].tolist(),
+            'now_price': now_price,
+            'last_close': last_close,
+            'buy_signals': buy_signals,
+            'sell_signals': sell_signals
+        }
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({'error': str(e)})
+
 @app.route("/btc_chart")
 def btc_chart():
-    chart_path = os.path.join("metrics", "charts", "btc_chart_live.html")
-    if not os.path.exists(chart_path):
-        return "<div style='color:red'>No chart available. Run save_btc_chart_live.py first.</div>"
-    with open(chart_path, "r", encoding="utf-8") as f:
-        return f.read()
+    return '''
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>BTC/USDT Chart</title>
+        <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+        <style>
+            html, body {height: 100%; margin: 0; padding: 0; background: #111111;}
+            #chart {position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100vw; height: 100vh; background: #111111;}
+        </style>
+    </head>
+    <body>
+        <div id="chart"></div>
+        <script>
+        function getIframeHeight() {
+            try {
+                if (window.parent !== window && window.frameElement) {
+                    return window.frameElement.clientHeight;
+                }
+            } catch (e) {}
+            return window.innerHeight;
+        }
+        async function fetchDataAndPlot() {
+            const res = await fetch('/btc_chart_data');
+            const data = await res.json();
+            if(data.error) {
+                document.getElementById('chart').innerHTML = '<div style="color:red">'+data.error+'</div>';
+                return;
+            }
+            const traceCandle = {
+                x: data.x,
+                open: data.open,
+                high: data.high,
+                low: data.low,
+                close: data.close,
+                type: 'candlestick',
+                name: 'Candles',
+                increasing: {line: {color: '#26a69a'}},
+                decreasing: {line: {color: '#ef5350'}},
+                showlegend: false
+            };
+            const traceEMA9 = {
+                x: data.x,
+                y: data.ema9,
+                type: 'scatter',
+                mode: 'lines',
+                name: 'EMA 9',
+                line: {color: '#ffd600', width: 1.5}
+            };
+            const traceEMA21 = {
+                x: data.x,
+                y: data.ema21,
+                type: 'scatter',
+                mode: 'lines',
+                name: 'EMA 21',
+                line: {color: '#00b0ff', width: 1.5}
+            };
+            const traceVol = {
+                x: data.x,
+                y: data.volume,
+                type: 'bar',
+                name: 'Volume',
+                marker: {color: '#757575'},
+                yaxis: 'y2',
+                opacity: 0.3
+            };
+            const traceBuy = {
+                x: data.buy_signals.map(s => s.date),
+                y: data.buy_signals.map(s => s.price),
+                mode: 'markers',
+                name: 'BUY',
+                marker: {
+                    symbol: 'arrow-up',
+                    color: '#00e676',
+                    size: 18,
+                    line: {width: 2, color: '#111'}
+                },
+                type: 'scatter',
+                hovertemplate: 'BUY<br>Date: %{x}<br>Price: $%{y:.2f}<extra></extra>'
+            };
+            const traceSell = {
+                x: data.sell_signals.map(s => s.date),
+                y: data.sell_signals.map(s => s.price),
+                mode: 'markers',
+                name: 'SELL',
+                marker: {
+                    symbol: 'arrow-down',
+                    color: '#ff1744',
+                    size: 18,
+                    line: {width: 2, color: '#111'}
+                },
+                type: 'scatter',
+                hovertemplate: 'SELL<br>Date: %{x}<br>Price: $%{y:.2f}<extra></extra>'
+            };
+            let shapes = [];
+            let annotations = [];
+            if(data.now_price) {
+                shapes.push({
+                    type: 'line',
+                    xref: 'paper',
+                    x0: 0, x1: 1,
+                    y0: data.now_price, y1: data.now_price,
+                    line: {color: '#ff1744', width: 2, dash: 'dot'},
+                });
+                annotations.push({
+                    xref: 'paper',
+                    x: 1.01,
+                    y: data.now_price,
+                    xanchor: 'left',
+                    yanchor: 'middle',
+                    text: '$' + data.now_price.toLocaleString(undefined, {maximumFractionDigits:2}),
+                    font: {color: '#ff1744', size: 14, family: 'monospace'},
+                    showarrow: false,
+                    bgcolor: '#181a1b',
+                    bordercolor: '#ff1744',
+                    borderpad: 4,
+                    borderwidth: 2
+                });
+            }
+            let range = undefined;
+            if(data.x && data.x.length > 400) {
+                range = [data.x[data.x.length-400], data.x[data.x.length-1]];
+            }
+            const layout = {
+                plot_bgcolor: '#111111',
+                paper_bgcolor: '#111111',
+                autosize: true,
+                xaxis: {
+                    rangeslider: {visible: false},
+                    color: '#e0e0e0',
+                    range: range,
+                    fixedrange: false,
+                    automargin: true
+                },
+                yaxis: {title: 'Price', side: 'right', color: '#e0e0e0', tickformat: ',.0f', fixedrange: false, automargin: true},
+                yaxis2: {
+                    title: 'Volume',
+                    overlaying: 'y',
+                    side: 'left',
+                    showgrid: false,
+                    position: 0.05,
+                    anchor: 'x',
+                    layer: 'below traces',
+                    color: '#e0e0e0',
+                    tickformat: ',.0f',
+                    fixedrange: false,
+                    automargin: true
+                },
+                template: 'plotly_dark',
+                margin: {l:40, r:40, t:40, b:40},
+                height: getIframeHeight(),
+                legend: {orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'right', x: 1, font: {color: '#e0e0e0'}},
+                title: 'BTC/USDT 1D - Updated: ' + new Date().toLocaleString(),
+                shapes: shapes,
+                annotations: annotations
+            };
+            Plotly.newPlot('chart', [traceCandle, traceEMA9, traceEMA21, traceVol, traceBuy, traceSell], layout, {responsive:true});
+        }
+        fetchDataAndPlot();
+        setInterval(fetchDataAndPlot, 5000);
+        window.addEventListener('resize', () => {
+            Plotly.Plots.resize('chart');
+        });
+        </script>
+    </body>
+    </html>
+    '''
 
 @app.route("/")
 def dashboard():

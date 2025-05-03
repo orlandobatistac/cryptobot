@@ -193,7 +193,6 @@ def main():
         print_trade_status(balance, btc_balance, realtime_price, position)
         print_metrics(metrics, position, realtime_price)
         # --- Automatic strategy ---
-        strategy.calculate_indicators(None)  # No data update
         # ENTRY
         if not position and strategy.entry_signal(None, None, is_backtest=False):
             print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Entry signal detected.")
