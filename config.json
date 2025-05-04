@@ -50,5 +50,23 @@
     "interval": "1D",
     "data_file_path": "data/ohlc_data_60min_all_years.parquet",
     "output_dir": "results/backtest"
+  },
+  "notifications": {
+    "enabled": false,
+    "smtp": {
+      "host": "smtp.gmail.com",
+      "port": 587,
+      "user": "email@gmail.com",
+      "password": "pass"
+    },
+    "recipients": ["email@gmail.com"],
+    "types": {
+      "critical_error": true,
+      "order": true,
+      "daily_summary": true,
+      "monthly_summary": true,
+      "analysis": true,
+      "status_change": true
+    }
   }
 }

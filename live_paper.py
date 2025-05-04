@@ -6,6 +6,7 @@ from strategy import Strategy
 from logger import logger
 from colorama import init, Fore, Style
 from tabulate import tabulate
+from notifications import load_config, send_email, format_critical_error, format_order, format_analysis
 
 try:
     from inputimeout import inputimeout, TimeoutOccurred
@@ -502,6 +503,11 @@ def get_min_volume(pair):
     # You can adjust this value per pair or make it configurable
     return 0.001
 
+def notificaciones_habilitadas(tipo):
+    config = load_config()
+    notif = config.get('notifications', {})
+    return notif.get('enabled', False) and notif.get('types', {}).get(tipo, False)
+
 def main():
     """
     Main paper trading loop: initializes database, loads data, evaluates strategy, and handles user input.
@@ -566,6 +572,10 @@ def main():
                 last_evaluated_candle = last_candle_time
                 print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Evaluating strategy (new candle)...\n")
                 auto_action = None
+                # Notificación de análisis diario
+                if notificaciones_habilitadas('analysis'):
+                    operacion = position if position else None
+                    send_email(**format_analysis())
                 if not position and strategy.entry_signal(None, None, is_backtest=False):
                     auto_action = 'buy'
                     print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Entry signal detected.")
@@ -589,6 +599,8 @@ def main():
                             'source': 'auto'
                         }
                         print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Auto BUY: {volume:.6f} BTC @ ${auto_price:,.2f}")
+                        if notificaciones_habilitadas('order'):
+                            send_email(**format_order('compra'))
                 # Auto SELL
                 elif position and strategy.exit_signal(None, None, is_backtest=False):
                     auto_action = 'sell'
@@ -605,6 +617,8 @@ def main():
                     save_trade('sell', auto_price, position['volume'], pl, balance, source='auto', fee=trade_fee)
                     print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Auto SELL: {position['volume']:.6f} BTC @ ${auto_price:,.2f} | P/L: ${pl:,.2f}")
                     position = None
+                    if notificaciones_habilitadas('order'):
+                        send_email(**format_order('venta'))
             else:
                 print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Waiting for new candle to evaluate strategy...\n")
 
@@ -643,6 +657,8 @@ def main():
                         }
                         print(f"Simulated BUY: {volume:.6f} BTC @ ${realtime_price:,.2f}")
                         logger.info(f"Simulated BUY: {volume:.6f} BTC @ ${realtime_price:,.2f}")
+                        if notificaciones_habilitadas('order'):
+                            send_email(**format_order('compra'))
             elif user_input == 's' and position:
                 realtime_price = get_realtime_price(PAIR)
                 if not realtime_price:
@@ -656,6 +672,8 @@ def main():
                     print(f"Simulated SELL: {position['volume']:.6f} BTC @ ${realtime_price:,.2f} | P/L: ${pl:,.2f}")
                     logger.info(f"Simulated SELL: {position['volume']:.6f} BTC @ ${realtime_price:,.2f} | P/L: ${pl:,.2f}")
                     position = None
+                    if notificaciones_habilitadas('order'):
+                        send_email(**format_order('venta'))
             elif user_input == 'b' and position:
                 print("You already have an open position. Close it before buying again.")
                 time.sleep(4)
@@ -668,6 +686,11 @@ def main():
     except KeyboardInterrupt:
         print("\nBot manually stopped by user (Ctrl+C).\n")
         logger.info("Bot manually stopped by user (Ctrl+C).")
+    except Exception as e:
+        logger.error(f"Excepción crítica: {e}")
+        if notificaciones_habilitadas('critical_error'):
+            send_email(**format_critical_error())
+        raise
     finally:
         print_session_summary()
 

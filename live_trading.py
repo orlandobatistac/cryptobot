@@ -12,6 +12,7 @@ from logger import logger
 from colorama import Fore, Style, init
 from tabulate import tabulate
 from dotenv import load_dotenv
+from notifications import load_config, send_email, format_critical_error, format_order
 
 init(autoreset=True)
 
@@ -172,6 +173,11 @@ def print_metrics(metrics, position, realtime_price):
     print(f"Max drawdown: ${metrics['max_drawdown']:.2f}")
     print("-------------------------------------\n")
 
+def notificaciones_habilitadas(tipo):
+    config = load_config()
+    notif = config.get('notifications', {})
+    return notif.get('enabled', False) and notif.get('types', {}).get(tipo, False)
+
 def main():
     print("\n[INFO] Starting LIVE trading mode (REAL MONEY).\n")
     logger.info("Starting LIVE trading mode (REAL MONEY).")
@@ -179,90 +185,103 @@ def main():
     position = None
     global metrics
     
-    while RUNNING:
-        balance = get_account_balance()
-        btc_balance = get_asset_balance()
-        realtime_price = get_realtime_price(PAIR)
-        # Update max balance and drawdown metrics
-        if balance is not None:
-            if balance > metrics['max_balance']:
-                metrics['max_balance'] = balance
-            dd = metrics['max_balance'] - balance
-            if dd > metrics['max_drawdown']:
-                metrics['max_drawdown'] = dd
-        print_trade_status(balance, btc_balance, realtime_price, position)
-        print_metrics(metrics, position, realtime_price)
-        # --- Automatic strategy ---
-        # ENTRY
-        if not position and strategy.entry_signal(None, None, is_backtest=False):
-            print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Entry signal detected.")
-            invest_amount = balance * INVESTMENT_FRACTION
-            if invest_amount < 10:  # Kraken minimum for BTC/USD
-                print("[WARN] Investment amount too small for real trade.")
-                logger.warning("Investment amount too small for real trade.")
-            else:
-                volume = invest_amount / realtime_price
-                if volume < MIN_TRADE_SIZE:
-                    print("[WARN] Volume below minimum trade size.")
-                    logger.warning("Volume below minimum trade size.")
+    try:
+        while RUNNING:
+            balance = get_account_balance()
+            btc_balance = get_asset_balance()
+            realtime_price = get_realtime_price(PAIR)
+            # Update max balance and drawdown metrics
+            if balance is not None:
+                if balance > metrics['max_balance']:
+                    metrics['max_balance'] = balance
+                dd = metrics['max_balance'] - balance
+                if dd > metrics['max_drawdown']:
+                    metrics['max_drawdown'] = dd
+            print_trade_status(balance, btc_balance, realtime_price, position)
+            print_metrics(metrics, position, realtime_price)
+            # --- Automatic strategy ---
+            # ENTRY
+            if not position and strategy.entry_signal(None, None, is_backtest=False):
+                print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Entry signal detected.")
+                invest_amount = balance * INVESTMENT_FRACTION
+                if invest_amount < 10:  # Kraken minimum for BTC/USD
+                    print("[WARN] Investment amount too small for real trade.")
+                    logger.warning("Investment amount too small for real trade.")
                 else:
-                    txid = place_order('buy', PAIR, volume)
-                    if txid:
-                        print(f"[LIVE] Buy order placed. Waiting for confirmation...")
-                        # Wait for confirmation
-                        for _ in range(10):
-                            status = check_order_status(txid)
-                            if status == 'closed':
-                                print(f"[LIVE] Buy order filled.")
-                                break
-                            time.sleep(5)
-                        position = {
-                            'entry_price': realtime_price,
-                            'volume': volume,
-                            'entry_time': datetime.utcnow()
-                        }
-                        # Update trade metrics
-                        metrics['trades_executed'] += 1
-                        if 'trades_won' not in metrics:
-                            metrics['trades_won'] = 0
-                        metrics['last_trade'] = {
-                            'type': 'buy',
-                            'time': datetime.utcnow(),
-                            'price': realtime_price,
-                            'volume': volume
-                        }
+                    volume = invest_amount / realtime_price
+                    if volume < MIN_TRADE_SIZE:
+                        print("[WARN] Volume below minimum trade size.")
+                        logger.warning("Volume below minimum trade size.")
                     else:
-                        print("[ERROR] Failed to place buy order.")
-        # EXIT
-        elif position and strategy.exit_signal(None, None, is_backtest=False):
-            print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Exit signal detected.")
-            txid = place_order('sell', PAIR, position['volume'])
-            if txid:
-                print(f"[LIVE] Sell order placed. Waiting for confirmation...")
-                for _ in range(10):
-                    status = check_order_status(txid)
-                    if status == 'closed':
-                        print(f"[LIVE] Sell order filled.")
-                        break
-                    time.sleep(5)
-                # Update trade metrics and realized profit
-                profit = (realtime_price - position['entry_price']) * position['volume']
-                metrics['total_profit'] += profit
-                metrics['trades_executed'] += 1
-                if profit > 0:
-                    metrics['trades_won'] = metrics.get('trades_won', 0) + 1
-                metrics['last_trade'] = {
-                    'type': 'sell',
-                    'time': datetime.utcnow(),
-                    'price': realtime_price,
-                    'volume': position['volume']
-                }
-                position = None
+                        txid = place_order('buy', PAIR, volume)
+                        if txid:
+                            print(f"[LIVE] Buy order placed. Waiting for confirmation...")
+                            # Wait for confirmation
+                            for _ in range(10):
+                                status = check_order_status(txid)
+                                if status == 'closed':
+                                    print(f"[LIVE] Buy order filled.")
+                                    break
+                                time.sleep(5)
+                            position = {
+                                'entry_price': realtime_price,
+                                'volume': volume,
+                                'entry_time': datetime.utcnow()
+                            }
+                            # Update trade metrics
+                            metrics['trades_executed'] += 1
+                            if 'trades_won' not in metrics:
+                                metrics['trades_won'] = 0
+                            metrics['last_trade'] = {
+                                'type': 'buy',
+                                'time': datetime.utcnow(),
+                                'price': realtime_price,
+                                'volume': volume
+                            }
+                            if notificaciones_habilitadas('order'):
+                                send_email(**format_order('compra'))
+                        else:
+                            print("[ERROR] Failed to place buy order.")
+            # EXIT
+            elif position and strategy.exit_signal(None, None, is_backtest=False):
+                print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Exit signal detected.")
+                txid = place_order('sell', PAIR, position['volume'])
+                if txid:
+                    print(f"[LIVE] Sell order placed. Waiting for confirmation...")
+                    for _ in range(10):
+                        status = check_order_status(txid)
+                        if status == 'closed':
+                            print(f"[LIVE] Sell order filled.")
+                            break
+                        time.sleep(5)
+                    # Update trade metrics and realized profit
+                    profit = (realtime_price - position['entry_price']) * position['volume']
+                    metrics['total_profit'] += profit
+                    metrics['trades_executed'] += 1
+                    if profit > 0:
+                        metrics['trades_won'] = metrics.get('trades_won', 0) + 1
+                    metrics['last_trade'] = {
+                        'type': 'sell',
+                        'time': datetime.utcnow(),
+                        'price': realtime_price,
+                        'volume': position['volume']
+                    }
+                    position = None
+                    if notificaciones_habilitadas('order'):
+                        send_email(**format_order('venta'))
+                else:
+                    print("[ERROR] Failed to place sell order.")
             else:
-                print("[ERROR] Failed to place sell order.")
-        else:
-            print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Waiting for strategy evaluation...\n")
-        time.sleep(60)
+                print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Waiting for strategy evaluation...\n")
+            time.sleep(60)
+    except KeyboardInterrupt:
+        print("\n[INFO] Stopping bot due to keyboard interrupt.\n")
+        logger.info("Stopping bot due to keyboard interrupt.")
+    except Exception as e:
+        logger.error(f"Excepción crítica: {e}")
+        if notificaciones_habilitadas('critical_error'):
+            send_email(**format_critical_error())
+        raise
 
 if __name__ == "__main__":
     main()

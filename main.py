@@ -16,6 +16,7 @@ import pandas as pd
 import numpy as np
 import subprocess
 import sys
+from notifications import load_config, send_email, format_critical_error
 
 # Load configuration from config.json
 with open("config.json", "r") as config_file:
@@ -154,6 +155,11 @@ def update_parquet():
     except subprocess.CalledProcessError as e:
         logger.error(f"Error running update_data.py: {e.stderr}")
         print(f"Warning: Failed to update parquet data: {e.stderr}")
+
+def notificaciones_habilitadas(tipo):
+    config = load_config()
+    notif = config.get('notifications', {})
+    return notif.get('enabled', False) and notif.get('types', {}).get(tipo, False)
 
 logger.info("Cryptobot initialized. Logger is configured.")
 
@@ -428,4 +434,6 @@ if __name__ == "__main__":
 
     except Exception as e:
         logger.critical(f"An unexpected error occurred: {e}", exc_info=True)
+        if notificaciones_habilitadas('critical_error'):
+            send_email(**format_critical_error())
         exit(1)

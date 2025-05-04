@@ -4,6 +4,10 @@ import time
 import subprocess
 import threading
 import platform
+import json
+from notifications import send_test_emails, load_config, send_email, format_status_change, format_daily_summary, format_monthly_summary, format_dashboard_email
+import monitor
+from datetime import datetime, timedelta
 
 # Configuración de rutas
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -46,6 +50,58 @@ def run_subprocess(cmd, name):
         print(f"[WARN] {name} terminó. Reiniciando en 5s...")
         time.sleep(5)
 
+def activar_notificaciones():
+    config = load_config()
+    if not config['notifications']['enabled']:
+        config['notifications']['enabled'] = True
+        with open('config.json', 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        print('[RUN] Notificaciones activadas. Enviando correos de prueba...')
+        send_test_emails()
+    else:
+        print('[RUN] Las notificaciones ya estaban activadas.')
+
+def desactivar_notificaciones():
+    config = load_config()
+    if config['notifications']['enabled']:
+        config['notifications']['enabled'] = False
+        with open('config.json', 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        print('[RUN] Notificaciones desactivadas.')
+        send_email(**format_status_change(False))
+    else:
+        print('[RUN] Las notificaciones ya estaban desactivadas.')
+
+def enviar_resumen_diario():
+    config = load_config()
+    notif = config.get('notifications', {})
+    if not (notif.get('enabled', False) and notif.get('types', {}).get('daily_summary', False)):
+        return
+    # Obtener métricas reales de monitor.py
+    try:
+        metrics = monitor.metrics_api().get_json() if hasattr(monitor.metrics_api(), 'get_json') else monitor.metrics_api().json
+    except Exception:
+        metrics = None
+    if not metrics:
+        # Si no se pueden obtener, usar ceros
+        metrics = {
+            'usd_balance': 0,
+            'position': None,
+            'pl': 0,
+            'live_trading': {'total_profit': 0, 'pl_unrealized': 0, 'last_trade': 'N/A', 'win_rate': 0, 'uptime': 0, 'total_trades': 0, 'last_5_trades': []},
+            'paper': {'balance': 0, 'total_profit': 0, 'pl_unrealized': 0, 'total_trades': 0, 'win_rate': 0, 'uptime': 0, 'last_5_trades': []},
+            'server': {'flask_uptime': 0, 'cpu_percent': 0, 'ram_percent': 0, 'platform': 'Windows', 'now': datetime.now().strftime('%Y-%m-%d %H:%M:%S')},
+            'now': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+    send_email(**format_dashboard_email(metrics))
+
+def enviar_resumen_mensual():
+    config = load_config()
+    notif = config.get('notifications', {})
+    if not (notif.get('enabled', False) and notif.get('types', {}).get('monthly_summary', False)):
+        return
+    send_email(**format_monthly_summary())
+
 def main():
     # Lanzar bots y monitor en threads
     procs = [
@@ -65,4 +121,16 @@ def main():
         print("\n[RUN] Orquestador detenido por el usuario.")
 
 if __name__ == "__main__":
+    # Permitir activar/desactivar notificaciones desde la línea de comandos
+    if len(sys.argv) > 1:
+        if sys.argv[1] == '--activar-notificaciones':
+            activar_notificaciones()
+            sys.exit(0)
+        elif sys.argv[1] == '--desactivar-notificaciones':
+            desactivar_notificaciones()
+            sys.exit(0)
+    # Ejemplo: enviar resumen diario y mensual al inicio (puedes programar esto con un scheduler real)
+    enviar_resumen_diario()
+    if datetime.now().day == 1:
+        enviar_resumen_mensual()
     main()
