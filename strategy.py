@@ -210,7 +210,18 @@ class Strategy:
             # Check that we have not lost the last date
             if data.index[-1] != original_dates[-1]:
                 logger.warning(f"The last date {original_dates[-1]} was lost during indicator calculation. Using {data.index[-1]}")
-                
+
+            # NUEVO: Verificar que la columna 'sma_short' existe y no está vacía
+            if 'sma_short' not in data.columns:
+                logger.error("La columna 'sma_short' no existe después de calcular los indicadores.")
+                raise ValueError("La columna 'sma_short' no existe en el DataFrame.")
+            if data['sma_short'].isnull().all():
+                logger.error("La columna 'sma_short' está completamente vacía después de calcular los indicadores.")
+                raise ValueError("La columna 'sma_short' está vacía en el DataFrame.")
+
+            logger.debug(f"Columnas disponibles tras indicadores: {list(data.columns)}")
+            logger.debug(f"Shape final del DataFrame tras indicadores: {data.shape}")
+
             if data.empty:
                 logger.warning("All data dropped after indicator calculation due to NaN values.")
             logger.debug("Indicators calculated. Final data shape: %s", data.shape)
