@@ -1,3 +1,7 @@
+import logging
+logging.basicConfig(level=logging.WARNING)
+logging.getLogger().setLevel(logging.WARNING)
+
 from flask import Flask, render_template_string, jsonify, Response
 import os
 import sys
@@ -143,10 +147,12 @@ def get_live_paper_metrics():
 
 # --- SYSTEM METRICS ---
 def get_server_metrics():
+    disk_percent = psutil.disk_usage('/').percent
     return {
         'flask_uptime': int(time.time() - SERVER_START),
         'cpu_percent': psutil.cpu_percent(),
         'ram_percent': psutil.virtual_memory().percent,
+        'disk_percent': disk_percent,
         'platform': platform.platform(),
         'now': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     }
@@ -646,6 +652,12 @@ function renderMetrics(data) {
       <div class="card shadow"><div class="card-body">
         <h5 class="card-title"><span class="icon icon-server">&#128421;&#65039;</span>RAM</h5>
         <p class="card-text display-6">${data.server.ram_percent}%</p>
+      </div></div>
+    </div>
+    <div class="col-md-4">
+      <div class="card shadow"><div class="card-body">
+        <h5 class="card-title"><span class="icon icon-server">&#128190;</span>Disk</h5>
+        <p class="card-text display-6">${data.server.disk_percent}%</p>
       </div></div>
     </div>
   </div>

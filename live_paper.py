@@ -514,6 +514,37 @@ def notificaciones_habilitadas(tipo):
     notif = config.get('notifications', {})
     return notif.get('enabled', False) and notif.get('types', {}).get(tipo, False)
 
+# Register start time
+START_TIME = datetime.utcnow()
+
+def get_live_paper_metrics():
+    """
+    Get live metrics for the paper trading session.
+
+    Returns:
+        dict: Dictionary containing live metrics like balance, equity, P/L, etc.
+    """
+    try:
+        with DB_LOCK, sqlite3.connect(DB_FILE) as conn:
+            c = conn.cursor()
+            c.execute("SELECT COALESCE(SUM(CASE WHEN type='sell' THEN profit END), 0) FROM trades")
+            realized_profit = c.fetchone()[0]
+            c.execute("SELECT COALESCE(SUM(CASE WHEN type='buy' THEN profit END), 0) FROM trades")
+            unrealized_profit = c.fetchone()[0]
+            c.execute("SELECT balance FROM trades ORDER BY id DESC LIMIT 1")
+            balance = c.fetchone()[0]
+    except Exception as e:
+        logger.error(f"Exception in get_live_paper_metrics: {e}")
+        return {}
+    metrics = {
+        'realized_profit': realized_profit,
+        'unrealized_profit': unrealized_profit,
+        'balance': balance,
+        'equity': balance + (unrealized_profit if unrealized_profit else 0),
+        'uptime': (datetime.utcnow() - START_TIME).total_seconds()
+    }
+    return metrics
+
 def main():
     """
     Main paper trading loop: initializes database, loads data, evaluates strategy, and handles user input.

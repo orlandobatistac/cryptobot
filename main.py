@@ -66,10 +66,10 @@ def clean_old_results(directory, keep, file_prefix=None):
     for item in items[keep:]:
         if os.path.isdir(item):
             shutil.rmtree(item)
-            logger.info(f"Deleted old results folder: {item}")
+            # logger.info(f"Deleted old results folder: {item}")
         else:
             os.remove(item)
-            logger.info(f"Deleted old JSON file: {item}")
+            # logger.info(f"Deleted old JSON file: {item}")
 
 @log_debug
 def print_status_with_progress(step, status, pbar):
@@ -96,7 +96,7 @@ def create_sample_ohlcv_data():
 
     date_range = pd.date_range(start=start_date, end=end_date, freq=interval)
     n_points = len(date_range)
-    logger.info(f"Generating {n_points} data points from {start_date} to {end_date} with interval {interval}")
+    # logger.info(f"Generating {n_points} data points from {start_date} to {end_date} with interval {interval}")
 
     np.random.seed(42)
     base_price = 150
@@ -131,7 +131,7 @@ def create_sample_ohlcv_data():
 
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     df.to_parquet(output_file, engine="pyarrow")
-    logger.info(f"Sample data saved to {output_file} with {len(df)} points")
+    # logger.info(f"Sample data saved to {output_file} with {len(df)} points")
 
 @log_debug
 def update_parquet():
@@ -151,7 +151,7 @@ def update_parquet():
             capture_output=True,
             text=True
         )
-        logger.info(f"update_data.py output: {result.stdout}")
+        # logger.info(f"update_data.py output: {result.stdout}")
     except subprocess.CalledProcessError as e:
         logger.error(f"Error running update_data.py: {e.stderr}")
         print(f"Warning: Failed to update parquet data: {e.stderr}")
@@ -161,21 +161,21 @@ def notificaciones_habilitadas(tipo):
     notif = config.get('notifications', {})
     return notif.get('enabled', False) and notif.get('types', {}).get(tipo, False)
 
-logger.info("Cryptobot initialized. Logger is configured.")
+# logger.info("Cryptobot initialized. Logger is configured.")
 
 if __name__ == "__main__":
     try:
-        logger.info("Step 0: Checking sample data generation.")
+        # logger.info("Step 0: Checking sample data generation.")
         with tqdm(total=1, desc="Step 0: Generate Sample Data", ncols=100, ascii=".-") as pbar:
             try:
                 sample_data_path = "data/sample_ohlcv_data.parquet"
                 if config["general"].get("generate_sample_data", False):
-                    logger.info("Generating sample data...")
+                    # logger.info("Generating sample data...")
                     create_sample_ohlcv_data()
                     file_path = sample_data_path
                     print_status_with_progress("Step 0: Generate Sample Data", "OK", pbar)
                 else:
-                    logger.info("Using existing data file from config.")
+                    # logger.info("Using existing data file from config.")
                     file_path = config["data"]["data_file_path"]
                     pbar.set_description(f"Step 0: Generate Sample Data [{Fore.LIGHTBLACK_EX}DISABLE{Style.RESET_ALL}]")
                     pbar.update(1)
@@ -185,7 +185,7 @@ if __name__ == "__main__":
                 print_status_with_progress("Step 0: Generate Sample Data", "FAILED", pbar)
                 exit(1)
 
-        logger.info("Step 1: Initializing log clearing.")
+        # logger.info("Step 1: Initializing log clearing.")
         with tqdm(total=1, desc="Step 1: Clear Log Files", ncols=100, ascii=".-") as pbar:
             try:
                 clear_logs()
@@ -195,7 +195,7 @@ if __name__ == "__main__":
                 print_status_with_progress("Step 1: Clear Log Files", "FAILED", pbar)
                 exit(1)
 
-        logger.info("Step 2: Initializing configuration.")
+        # logger.info("Step 2: Initializing configuration.")
         with tqdm(total=1, desc="Step 2: Configuration", ncols=100, ascii=".-") as pbar:
             try:
                 initial_capital = config["general"]["initial_capital"]
@@ -217,7 +217,7 @@ if __name__ == "__main__":
                 print_status_with_progress("Step 2: Configuration", "FAILED", pbar)
                 exit(1)
 
-        logger.info("Step 3: Initializing data update and loading.")
+        # logger.info("Step 3: Initializing data update and loading.")
         with tqdm(total=1, desc="Step 3: Update and Load Data", ncols=100, ascii=".-") as pbar:
             try:
                 # Update the Parquet file before loading
@@ -233,7 +233,7 @@ if __name__ == "__main__":
                 print_status_with_progress("Step 3: Update and Load Data", "FAILED", pbar)
                 exit(1)
 
-        logger.info("Step 4: Initializing data validation.")
+        # logger.info("Step 4: Initializing data validation.")
         with tqdm(total=1, desc="Step 4: Validate Data", ncols=100, ascii=".-") as pbar:
             try:
                 required_columns = ['Close', 'High', 'Low', 'Volume']
@@ -260,7 +260,7 @@ if __name__ == "__main__":
         else:
             logger.warning("No valid candles to evaluate.")
 
-        logger.info("Step 5: Checking optimization status.")
+        # logger.info("Step 5: Checking optimization status.")
         with tqdm(total=config["optimization"]["n_trials"], desc="Step 5: Optimization", ncols=100, ascii=".-", mininterval=0.1, dynamic_ncols=False) as pbar:
             try:
                 if enable_optimization:
@@ -276,7 +276,7 @@ if __name__ == "__main__":
 
                     best_params = run_optimization(callback=progress_callback)
                     config["strategy"] = best_params
-                    logger.info(f"Loaded optimized parameters: {best_params}")
+                    # logger.info(f"Loaded optimized parameters: {best_params}")
 
                     if not pbar.disable and pbar.n < pbar.total:
                         pbar.set_description(f"Step 5: Optimization [{Fore.GREEN}OK{Style.RESET_ALL}]")
@@ -291,7 +291,7 @@ if __name__ == "__main__":
                 print_status_with_progress("Step 5: Optimization", "FAILED", pbar)
                 exit(1)
 
-        logger.info("Step 6: Initializing strategy.")
+        # logger.info("Step 6: Initializing strategy.")
         with tqdm(total=1, desc="Step 6: Strategy", ncols=100, ascii=".-") as pbar:
             try:
                 if enable_optimization:
@@ -303,7 +303,7 @@ if __name__ == "__main__":
                     with open(best_config_file, "r") as f:
                         loaded_data = json.load(f)
                         best_params = loaded_data["best_params"]
-                        logger.info(f"Loaded optimized parameters: {best_params}")
+                        # logger.info(f"Loaded optimized parameters: {best_params}")
                         config["strategy"].update(best_params)
 
                 strategy = Strategy(config["strategy"])
@@ -313,7 +313,7 @@ if __name__ == "__main__":
                 print_status_with_progress("Step 6: Strategy", "FAILED", pbar)
                 exit(1)
 
-        logger.info("Step 7: Initializing backtest.")
+        # logger.info("Step 7: Initializing backtest.")
         with tqdm(total=1, desc="Step 7: Run Backtest", ncols=100, ascii=".-") as pbar:
             try:
                 backtester = Backtester(
@@ -331,7 +331,7 @@ if __name__ == "__main__":
                 print_status_with_progress("Step 7: Run Backtest", "FAILED", pbar)
                 exit(1)
 
-        logger.info("Step 8: Initializing metrics generation and plotting.")
+        # logger.info("Step 8: Initializing metrics generation and plotting.")
         with tqdm(total=1, desc="Step 8: Generate Metrics", ncols=100, ascii=".-") as pbar:
             try:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

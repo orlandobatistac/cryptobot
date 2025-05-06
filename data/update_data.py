@@ -8,9 +8,11 @@ import logging
 # Configure logging
 logging.basicConfig(
     filename="debug.log",
-    level=logging.INFO,
+    level=logging.ERROR,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
+logging.basicConfig(level=logging.ERROR)
+logging.getLogger().setLevel(logging.ERROR)
 
 # Initialize the Kraken API
 k = krakenex.API()

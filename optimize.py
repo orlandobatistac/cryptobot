@@ -165,7 +165,7 @@ def run_optimization(callback=None):
 
     with open(file_path, "w") as f:
         json.dump(output_data, f, indent=4)
-    logging.info(f"Best parameters saved to {file_path}")
+    # logging.info(f"Best parameters saved to {file_path}")
 
     clean_old_results(optimization_results_dir, results_cleanup_limit, file_prefix="best_config_")
 

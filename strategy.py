@@ -242,7 +242,7 @@ class Strategy:
     @log_debug
     def entry_signal(self, row, data, is_backtest=False):
         if row is None:
-            logger.error("entry_signal recibió 'row=None'. No se puede procesar la señal de entrada.")
+            logger.warning("entry_signal recibió 'row=None'. No se puede procesar la señal de entrada.")
             return False
         try:
             # New validation: do not process future candles
@@ -307,7 +307,7 @@ class Strategy:
                 self.is_range_trading = False
             
             if signal:
-                logger.info(f"Entry signal generated at {row.name} (Range Trading: {self.is_range_trading})")
+                # logger.info(f"Entry signal generated at {row.name} (Range Trading: {self.is_range_trading})")
                 # row['entry_signal_generated'] = True  # Commented to avoid SettingWithCopyWarning. Does not affect main logic.
                 self.last_entry_time = row.name
                 self.position_open = True
@@ -378,7 +378,7 @@ class Strategy:
             signal = range_exit if self.is_range_trading else trend_exit
 
             if signal:
-                logger.info(f"Exit signal generated at {row.name} (Range Trading: {self.is_range_trading})")
+                # logger.info(f"Exit signal generated at {row.name} (Range Trading: {self.is_range_trading})")
                 row['exit_signal_generated'] = True
                 self.last_entry_time = None
                 self.position_open = False
