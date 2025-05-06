@@ -241,13 +241,9 @@ class Strategy:
 
     @log_debug
     def entry_signal(self, row, data, is_backtest=False):
-        """
-        Generate entry signal based on indicators.
-        :param row: Current row of data (Series).
-        :param data: Full DataFrame to access previous values.
-        :param is_backtest: Boolean indicating if called from backtest (iterates over all candles).
-        :return: True if entry signal is triggered, False otherwise.
-        """
+        if row is None:
+            logger.error("entry_signal recibió 'row=None'. No se puede procesar la señal de entrada.")
+            return False
         try:
             # New validation: do not process future candles
             now = datetime.datetime.now()

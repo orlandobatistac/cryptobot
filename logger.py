@@ -4,7 +4,7 @@ import logging
 def setup_logger():
     logger = logging.getLogger("cryptobot")
     if not logger.hasHandlers():
-        logger.setLevel(logging.DEBUG)
+        logger.setLevel(logging.WARNING)
         handler = logging.FileHandler("debug.log", mode="a", encoding="utf-8")
         formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(module)s - %(message)s")
         handler.setFormatter(formatter)

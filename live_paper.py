@@ -465,32 +465,38 @@ def print_trade_status(cycle, position, balance, realtime_price, trade_fee, sess
     uptime = now_dt - session_start_time
     uptime_str = str(uptime).split('.')[0]  # Format: days, HH:MM:SS
     headers = [f"{Fore.YELLOW}Field{Style.RESET_ALL}", f"{Fore.YELLOW}Value{Style.RESET_ALL}"]
+    balance_str = f"${balance:,.2f}" if balance is not None else "N/A"
+    price_str = f"${realtime_price:,.2f}" if realtime_price is not None else "N/A"
     table = [
         ["Cycle", cycle],
         ["Session Start", session_start_time.strftime('%Y-%m-%d %H:%M:%S') + " UTC"],
         ["Uptime", uptime_str],
         ["Time", now_str + " UTC"],
-        ["BTCUSD Price", f"${realtime_price:,.2f}" if realtime_price else "N/A"]
+        ["BTCUSD Price", price_str]
     ]
     if position:
-        pl = (realtime_price - position['entry_price']) * position['volume'] if realtime_price else 0
-        pl -= (position['entry_price'] + realtime_price) * position['volume'] * trade_fee if realtime_price else 0
-        equity = balance + (realtime_price * position['volume']) if realtime_price else balance
+        entry_price = position.get('entry_price')
+        volume = position.get('volume')
+        entry_price_str = f"${entry_price:,.2f}" if entry_price is not None else "N/A"
+        volume_str = f"{volume:.6f}" if volume is not None else "N/A"
+        pl = (realtime_price - entry_price) * volume if (realtime_price is not None and entry_price is not None and volume is not None) else 0
+        pl -= (entry_price + realtime_price) * volume * trade_fee if (realtime_price is not None and entry_price is not None and volume is not None) else 0
+        equity = balance + (realtime_price * volume) if (realtime_price is not None and volume is not None and balance is not None) else balance
         pl_color = Fore.GREEN if pl >= 0 else Fore.RED
-        eq_color = Fore.GREEN if equity >= GENERAL_CONFIG['initial_capital'] else Fore.RED
+        eq_color = Fore.GREEN if equity is not None and equity >= GENERAL_CONFIG['initial_capital'] else Fore.RED
         table.extend([
-            ["Trade", f"{Fore.CYAN}BUY {position['volume']:.6f} BTC @ ${position['entry_price']:,.2f}{Style.RESET_ALL}"],
+            ["Trade", f"{Fore.CYAN}BUY {volume_str} BTC @ {entry_price_str}{Style.RESET_ALL}"],
             ["Type", position.get('source', 'unknown')],
-            ["Open Time", position['entry_time'].strftime('%Y-%m-%d %H:%M:%S')],
-            ["P/L", f"{pl_color}${pl:,.2f}{Style.RESET_ALL}"],
-            ["Equity", f"{eq_color}${equity:,.2f}{Style.RESET_ALL}"]
+            ["Open Time", position['entry_time'].strftime('%Y-%m-%d %H:%M:%S') if position.get('entry_time') else "N/A"],
+            ["P/L", f"{pl_color}${pl:,.2f}{Style.RESET_ALL}" if (realtime_price is not None and entry_price is not None and volume is not None) else "N/A"],
+            ["Equity", f"{eq_color}${equity:,.2f}{Style.RESET_ALL}" if equity is not None else "N/A"]
         ])
     else:
-        bal_color = Fore.GREEN if balance >= GENERAL_CONFIG['initial_capital'] else Fore.RED
+        bal_color = Fore.GREEN if balance is not None and balance >= GENERAL_CONFIG['initial_capital'] else Fore.RED
         table.extend([
             ["Trade", "No open trade"],
             ["P/L", "N/A"],
-            ["Balance", f"{bal_color}${balance:,.2f}{Style.RESET_ALL}"]
+            ["Balance", f"{bal_color}${balance:,.2f}{Style.RESET_ALL}" if balance is not None else "N/A"]
         ])
     print(f"\n{Fore.CYAN}{'='*40}{Style.RESET_ALL}")
     print(tabulate(table, headers, tablefmt="plain"))
@@ -576,49 +582,63 @@ def main():
                 if notificaciones_habilitadas('analysis'):
                     operacion = position if position else None
                     send_email(**format_analysis())
-                if not position and strategy.entry_signal(None, None, is_backtest=False):
-                    auto_action = 'buy'
-                    print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Entry signal detected.")
-                    # Use real-time price for buying
-                    auto_price = realtime_price
-                    if auto_price is None:
-                        print("Cannot buy: real-time price unavailable.")
-                        time.sleep(INTERVAL * 60)
-                        continue
-                    invest_amount = balance * investment_fraction
-                    if invest_amount >= 1e-8 and balance > 0:
-                        volume = invest_amount / auto_price
-                        balance -= invest_amount
-                        # Use current time for the entry time
-                        entry_time = datetime.utcnow()
-                        save_trade('buy', auto_price, volume, 0, balance, source='auto', fee=trade_fee)
-                        position = {
-                            'entry_price': auto_price,
-                            'volume': volume,
-                            'entry_time': entry_time,
-                            'source': 'auto'
-                        }
-                        print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Auto BUY: {volume:.6f} BTC @ ${auto_price:,.2f}")
-                        if notificaciones_habilitadas('order'):
-                            send_email(**format_order('compra'))
+                # --- NUEVO FLUJO: cargar datos, calcular indicadores y evaluar señal ---
+                try:
+                    df = pd.read_parquet("data/ohlc_data_60min_all_years.parquet")
+                    df["Timestamp"] = pd.to_datetime(df["Timestamp"])
+                    df.set_index("Timestamp", inplace=True)
+                    strategy.calculate_indicators(df)
+                    last_row = strategy.get_last_valid_row(df)
+                except Exception as e:
+                    logger.error(f"Error cargando/parsing datos OHLC: {e}")
+                    last_row = None
+                    df = None
+                if not position and last_row is not None and df is not None:
+                    if strategy.entry_signal(last_row, df, is_backtest=False):
+                        auto_action = 'buy'
+                        print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Entry signal detected.")
+                        # Use real-time price for buying
+                        auto_price = realtime_price
+                        if auto_price is None:
+                            print("Cannot buy: real-time price unavailable.")
+                            time.sleep(INTERVAL * 60)
+                            continue
+                        invest_amount = balance * investment_fraction
+                        if invest_amount >= 1e-8 and balance > 0:
+                            volume = invest_amount / auto_price
+                            balance -= invest_amount
+                            # Use current time for the entry time
+                            entry_time = datetime.utcnow()
+                            save_trade('buy', auto_price, volume, 0, balance, source='auto', fee=trade_fee)
+                            position = {
+                                'entry_price': auto_price,
+                                'volume': volume,
+                                'entry_time': entry_time,
+                                'source': 'auto'
+                            }
+                            print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Auto BUY: {volume:.6f} BTC @ ${auto_price:,.2f}")
+                            if notificaciones_habilitadas('order'):
+                                send_email(**format_order('compra'))
                 # Auto SELL
-                elif position and strategy.exit_signal(None, None, is_backtest=False):
-                    auto_action = 'sell'
-                    print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Exit signal detected.")
-                    # Use real-time price for selling
-                    auto_price = realtime_price
-                    if auto_price is None:
-                        print("Cannot sell: real-time price unavailable.")
-                        time.sleep(INTERVAL * 60)
-                        continue
-                    pl = (auto_price - position['entry_price']) * position['volume']
-                    pl -= (position['entry_price'] + auto_price) * position['volume'] * trade_fee
-                    balance += (auto_price * position['volume']) + pl
-                    save_trade('sell', auto_price, position['volume'], pl, balance, source='auto', fee=trade_fee)
-                    print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Auto SELL: {position['volume']:.6f} BTC @ ${auto_price:,.2f} | P/L: ${pl:,.2f}")
-                    position = None
-                    if notificaciones_habilitadas('order'):
-                        send_email(**format_order('venta'))
+                elif position:
+                    # Para SELL, también se debe pasar la última fila y el df
+                    if last_row is not None and df is not None and strategy.exit_signal(last_row, df, is_backtest=False):
+                        auto_action = 'sell'
+                        print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Exit signal detected.")
+                        # Use real-time price for selling
+                        auto_price = realtime_price
+                        if auto_price is None:
+                            print("Cannot sell: real-time price unavailable.")
+                            time.sleep(INTERVAL * 60)
+                            continue
+                        pl = (auto_price - position['entry_price']) * position['volume']
+                        pl -= (position['entry_price'] + auto_price) * position['volume'] * trade_fee
+                        balance += (auto_price * position['volume']) + pl
+                        save_trade('sell', auto_price, position['volume'], pl, balance, source='auto', fee=trade_fee)
+                        print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Auto SELL: {position['volume']:.6f} BTC @ ${auto_price:,.2f} | P/L: ${pl:,.2f}")
+                        position = None
+                        if notificaciones_habilitadas('order'):
+                            send_email(**format_order('venta'))
             else:
                 print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Waiting for new candle to evaluate strategy...\n")
 

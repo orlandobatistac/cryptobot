@@ -130,18 +130,25 @@ def check_order_status(txid):
 
 def print_trade_status(balance, btc_balance, realtime_price, position):
     headers = [f"{Fore.YELLOW}Field{Style.RESET_ALL}", f"{Fore.YELLOW}Value{Style.RESET_ALL}"]
+    balance_str = f"${balance:,.2f}" if balance is not None else "N/A"
+    btc_balance_str = f"{btc_balance:.6f} BTC" if btc_balance is not None else "N/A"
+    price_str = f"${realtime_price:,.2f}" if realtime_price is not None else "N/A"
     table = [
-        ["USD Balance", f"${balance:,.2f}"],
-        ["BTC Balance", f"{btc_balance:.6f} BTC"],
-        ["BTCUSD Price", f"${realtime_price:,.2f}" if realtime_price else "N/A"]
+        ["USD Balance", balance_str],
+        ["BTC Balance", btc_balance_str],
+        ["BTCUSD Price", price_str]
     ]
     if position:
-        pl = (realtime_price - position['entry_price']) * position['volume'] if realtime_price else 0
+        entry_price = position.get('entry_price')
+        volume = position.get('volume')
+        entry_price_str = f"${entry_price:,.2f}" if entry_price is not None else "N/A"
+        volume_str = f"{volume:.6f}" if volume is not None else "N/A"
+        pl = (realtime_price - entry_price) * volume if (realtime_price is not None and entry_price is not None and volume is not None) else 0
         pl_color = Fore.GREEN if pl >= 0 else Fore.RED
         table.extend([
-            ["Trade", f"{Fore.CYAN}BUY {position['volume']:.6f} BTC @ ${position['entry_price']:,.2f}{Style.RESET_ALL}"],
-            ["Open Time", position['entry_time'].strftime('%Y-%m-%d %H:%M:%S')],
-            ["P/L", f"{pl_color}${pl:,.2f}{Style.RESET_ALL}"]
+            ["Trade", f"{Fore.CYAN}BUY {volume_str} BTC @ {entry_price_str}{Style.RESET_ALL}"],
+            ["Open Time", position['entry_time'].strftime('%Y-%m-%d %H:%M:%S') if position.get('entry_time') else "N/A"],
+            ["P/L", f"{pl_color}${pl:,.2f}{Style.RESET_ALL}" if realtime_price is not None and entry_price is not None and volume is not None else "N/A"]
         ])
     else:
         table.append(["Trade", "No open trade"])
