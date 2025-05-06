@@ -14,6 +14,7 @@ from tabulate import tabulate
 from dotenv import load_dotenv
 from notifications import load_config, send_email, format_critical_error, format_order
 import pandas as pd
+import sqlite3
 
 init(autoreset=True)
 
@@ -55,6 +56,8 @@ metrics = {
     'max_balance': 0.0,
 }
 
+DB_FILE = "paper_trades.db"
+
 def _signal_handler(sig, frame):
     global RUNNING
     print("\nStopped by exit signal.\n")
@@ -69,10 +72,14 @@ def get_account_balance(asset="ZUSD"):
         resp = k.query_private('Balance')
         if resp.get('error'):
             logger.error(f"Kraken API error (Balance): {resp['error']}")
+            print(f"[ERROR] Kraken API error (Balance): {resp['error']}")
             return None
+        logger.info(f"[KRKN] Balance API OK. {asset}: {resp['result'].get(asset, 0)}")
+        print(f"[KRKN] Balance API OK. {asset}: {resp['result'].get(asset, 0)}")
         return float(resp['result'].get(asset, 0))
     except Exception as e:
         logger.error(f"Exception in get_account_balance: {e}")
+        print(f"[ERROR] Exception in get_account_balance: {e}")
         return None
 
 def get_asset_balance(asset="XXBT"):
@@ -188,8 +195,29 @@ def notificaciones_habilitadas(tipo):
     notif = config.get('notifications', {})
     return notif.get('enabled', False) and notif.get('types', {}).get(tipo, False)
 
+def set_bot_start_time():
+    with sqlite3.connect(DB_FILE) as conn:
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS bot_status (
+            bot_name TEXT PRIMARY KEY,
+            start_time TEXT
+        )''')
+        c.execute("INSERT OR REPLACE INTO bot_status (bot_name, start_time) VALUES (?, ?)",
+                  ('live_trading', datetime.utcnow().isoformat()))
+        conn.commit()
+
+def get_bot_start_time():
+    with sqlite3.connect(DB_FILE) as conn:
+        c = conn.cursor()
+        c.execute("SELECT start_time FROM bot_status WHERE bot_name=?", ('live_trading',))
+        row = c.fetchone()
+        if row:
+            return datetime.fromisoformat(row[0])
+        return None
+
 def get_live_trading_metrics():
-    uptime = int((datetime.utcnow() - START_TIME).total_seconds())
+    start_time = get_bot_start_time()
+    uptime = int((datetime.utcnow() - start_time).total_seconds()) if start_time else 0
     return {
         'total_profit': 0.0,
         'pl_unrealized': 0.0,
@@ -211,6 +239,12 @@ def main():
             balance = get_account_balance()
             btc_balance = get_asset_balance()
             realtime_price = get_realtime_price(PAIR)
+            if balance is None:
+                logger.error("[CRITICAL] No se pudo obtener el balance de Kraken. El bot no puede operar.")
+                print("[CRITICAL] No se pudo obtener el balance de Kraken. El bot no puede operar.")
+            else:
+                logger.info(f"[CYCLE] Balance Kraken OK: {balance}")
+                print(f"[CYCLE] Balance Kraken OK: {balance}")
             # Update max balance and drawdown metrics
             if balance is not None:
                 if balance > metrics['max_balance']:
@@ -314,4 +348,5 @@ def main():
         raise
 
 if __name__ == "__main__":
+    set_bot_start_time()
     main()

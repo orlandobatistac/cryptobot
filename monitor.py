@@ -15,6 +15,7 @@ import time
 import pandas as pd
 import plotly.graph_objs as go
 import json
+import numpy as np
 
 # Basic configuration
 app = Flask(__name__)
@@ -61,8 +62,23 @@ def get_position():
     # Example: no open position
     return None
 
+def get_bot_start_time(bot_name):
+    import sqlite3
+    db_path = os.path.join(os.path.dirname(__file__), 'paper_trades.db')
+    try:
+        with sqlite3.connect(db_path) as conn:
+            c = conn.cursor()
+            c.execute("SELECT start_time FROM bot_status WHERE bot_name=?", (bot_name,))
+            row = c.fetchone()
+            if row:
+                return datetime.fromisoformat(row[0])
+    except Exception:
+        pass
+    return None
+
 def get_live_trading_metrics():
-    uptime = int(time.time() - SERVER_START)
+    start_time = get_bot_start_time('live_trading')
+    uptime = int((datetime.utcnow() - start_time).total_seconds()) if start_time else 0
     return {
         'total_profit': 0.0,
         'pl_unrealized': 0.0,
@@ -143,6 +159,11 @@ def get_live_paper_metrics():
     # Si no hay trades y el balance es 0, mostrar el initial_capital
     if metrics['total_trades'] == 0 and metrics['balance'] == 0:
         metrics['balance'] = initial_capital
+    start_time = get_bot_start_time('live_paper')
+    if start_time:
+        metrics['uptime'] = (datetime.utcnow() - start_time).total_seconds()
+    else:
+        metrics['uptime'] = 0
     return metrics
 
 # --- SYSTEM METRICS ---
@@ -159,7 +180,13 @@ def get_server_metrics():
 
 @app.route("/metrics")
 def metrics_api():
-    usd_balance = get_account_balance() or 0
+    api_status = 'UNKNOWN'
+    try:
+        usd_balance = get_account_balance() or 0
+        api_status = 'ONLINE' if usd_balance is not None else 'ERROR'
+    except Exception:
+        usd_balance = 0
+        api_status = 'ERROR'
     price = get_realtime_price(PAIR) or 0
     position = get_position()
     pl = 0
@@ -175,12 +202,17 @@ def metrics_api():
         'paper': paper,
         'server': server,
         'live_trading': live_trading,
+        'api_status': api_status,
         'now': server['now']
     })
 
 @app.route("/logs")
 def logs_api():
     log_path = os.path.join(os.path.dirname(__file__), 'debug.log')
+    if not os.path.exists(log_path):
+        # Crear el archivo vacío si no existe
+        with open(log_path, 'w', encoding='utf-8') as f:
+            f.write('')
     try:
         with open(log_path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
@@ -204,8 +236,11 @@ def btc_chart_data():
             'Volume': 'sum'
         })
         df_1d = df_1d.dropna()
-        df_1d['EMA9'] = df_1d['Close'].ewm(span=9, adjust=False).mean()
-        df_1d['EMA21'] = df_1d['Close'].ewm(span=21, adjust=False).mean()
+        df_1d['SMA59'] = df_1d['Close'].rolling(window=59).mean()
+        df_1d['SMA200'] = df_1d['Close'].rolling(window=200).mean()
+        # Convert NaN to None for JSON serialization
+        def safe_list(series):
+            return [None if (pd.isna(x) or (isinstance(x, float) and np.isnan(x))) else x for x in series]
         # Current price
         last_close = float(df_1d['Close'].iloc[-1]) if not df_1d.empty else None
         now_price = get_realtime_price(PAIR)
@@ -229,18 +264,31 @@ def btc_chart_data():
         # Serialize data for Plotly
         data = {
             'x': df_1d.index.strftime('%Y-%m-%d').tolist(),
-            'open': df_1d['Open'].tolist(),
-            'high': df_1d['High'].tolist(),
-            'low': df_1d['Low'].tolist(),
-            'close': df_1d['Close'].tolist(),
-            'volume': df_1d['Volume'].tolist(),
-            'ema9': df_1d['EMA9'].tolist(),
-            'ema21': df_1d['EMA21'].tolist(),
+            'open': safe_list(df_1d['Open']),
+            'high': safe_list(df_1d['High']),
+            'low': safe_list(df_1d['Low']),
+            'close': safe_list(df_1d['Close']),
+            'volume': safe_list(df_1d['Volume']),
+            'sma59': safe_list(df_1d['SMA59']),
+            'sma200': safe_list(df_1d['SMA200']),
             'now_price': now_price,
             'last_close': last_close,
             'buy_signals': buy_signals,
             'sell_signals': sell_signals
         }
+        # Equity de Live Trading
+        try:
+            equity = []
+            db_path = os.path.join(os.path.dirname(__file__), 'paper_trades.db')
+            conn = sqlite3.connect(db_path)
+            c = conn.cursor()
+            c.execute("SELECT timestamp, balance FROM trades WHERE type IN ('buy','sell') ORDER BY timestamp ASC")
+            for ts, bal in c.fetchall():
+                equity.append({'date': pd.to_datetime(ts).strftime('%Y-%m-%d'), 'balance': bal})
+            conn.close()
+            data['equity'] = equity
+        except Exception:
+            data['equity'] = []
         return jsonify(data)
     except Exception as e:
         return jsonify({'error': str(e)})
@@ -277,6 +325,7 @@ def btc_chart():
                 document.getElementById('chart').innerHTML = '<div style="color:red">'+data.error+'</div>';
                 return;
             }
+            // --- Gráfica principal ---
             const traceCandle = {
                 x: data.x,
                 open: data.open,
@@ -285,63 +334,39 @@ def btc_chart():
                 close: data.close,
                 type: 'candlestick',
                 name: 'Candles',
-                increasing: {line: {color: '#26a69a'}},
-                decreasing: {line: {color: '#ef5350'}},
+                increasing: {line: {color: '#888'}},
+                decreasing: {line: {color: '#888'}},
                 showlegend: false
             };
-            const traceEMA9 = {
+            const traceSMA59 = {
                 x: data.x,
-                y: data.ema9,
+                y: data.sma59,
                 type: 'scatter',
                 mode: 'lines',
-                name: 'EMA 9',
-                line: {color: '#ffd600', width: 1.5}
+                name: 'SMA 59',
+                line: {color: '#a3c9e2', width: 1.5, dash: 'dot'}
             };
-            const traceEMA21 = {
+            const traceSMA200 = {
                 x: data.x,
-                y: data.ema21,
+                y: data.sma200,
                 type: 'scatter',
                 mode: 'lines',
-                name: 'EMA 21',
-                line: {color: '#00b0ff', width: 1.5}
+                name: 'SMA 200',
+                line: {color: '#f7d6b3', width: 1.5, dash: 'dash'}
             };
-            const traceVol = {
-                x: data.x,
-                y: data.volume,
-                type: 'bar',
-                name: 'Volume',
-                marker: {color: '#757575'},
+            // Equity Live Trading
+            const traceEquity = {
+                x: data.equity.map(e => e.date),
+                y: data.equity.map(e => e.balance),
+                type: 'scatter',
+                mode: 'lines',
+                name: 'Equity',
+                line: {color: '#b2dfdb', width: 6}, // color suave, más gruesa
                 yaxis: 'y2',
-                opacity: 0.3
+                connectgaps: true
             };
-            const traceBuy = {
-                x: data.buy_signals.map(s => s.date),
-                y: data.buy_signals.map(s => s.price),
-                mode: 'markers',
-                name: 'BUY',
-                marker: {
-                    symbol: 'arrow-up',
-                    color: '#00e676',
-                    size: 18,
-                    line: {width: 2, color: '#111'}
-                },
-                type: 'scatter',
-                hovertemplate: 'BUY<br>Date: %{x}<br>Price: $%{y:.2f}<extra></extra>'
-            };
-            const traceSell = {
-                x: data.sell_signals.map(s => s.date),
-                y: data.sell_signals.map(s => s.price),
-                mode: 'markers',
-                name: 'SELL',
-                marker: {
-                    symbol: 'arrow-down',
-                    color: '#ff1744',
-                    size: 18,
-                    line: {width: 2, color: '#111'}
-                },
-                type: 'scatter',
-                hovertemplate: 'SELL<br>Date: %{x}<br>Price: $%{y:.2f}<extra></extra>'
-            };
+            // ---
+            const plotData = [traceCandle, traceSMA59, traceSMA200, traceEquity];
             let shapes = [];
             let annotations = [];
             if(data.now_price) {
@@ -368,9 +393,8 @@ def btc_chart():
                 });
             }
             let range = undefined;
-            if(data.x && data.x.length > 400) {
-                range = [data.x[data.x.length-400], data.x[data.x.length-1]];
-            }
+            // Mostrar todo el rango de los últimos 3 años
+            range = undefined;
             const layout = {
                 plot_bgcolor: '#111111',
                 paper_bgcolor: '#111111',
@@ -384,17 +408,17 @@ def btc_chart():
                 },
                 yaxis: {title: 'Price', side: 'right', color: '#e0e0e0', tickformat: ',.0f', fixedrange: false, automargin: true},
                 yaxis2: {
-                    title: 'Volume',
+                    title: 'Equity',
                     overlaying: 'y',
                     side: 'left',
                     showgrid: false,
-                    position: 0.05,
+                    position: 0,
                     anchor: 'x',
-                    layer: 'below traces',
-                    color: '#e0e0e0',
+                    color: '#b2dfdb',
                     tickformat: ',.0f',
                     fixedrange: false,
-                    automargin: true
+                    automargin: true,
+                    rangemode: 'tozero' // el eje empieza en 0
                 },
                 template: 'plotly_dark',
                 margin: {l:40, r:40, t:40, b:40},
@@ -404,7 +428,7 @@ def btc_chart():
                 shapes: shapes,
                 annotations: annotations
             };
-            Plotly.newPlot('chart', [traceCandle, traceEMA9, traceEMA21, traceVol, traceBuy, traceSell], layout, {responsive:true});
+            Plotly.newPlot('chart', plotData, layout, {responsive:true});
         }
         fetchDataAndPlot();
         setInterval(fetchDataAndPlot, 5000);
@@ -550,25 +574,33 @@ function renderTradeTable(trades) {
 }
 function renderMetrics(data) {
   // Live Trading Metrics
+  let apiStatusIcon = data.api_status === 'ONLINE' ? '<span class="icon icon-server text-success">&#9989;</span>' : '<span class="icon icon-server text-danger">&#10060;</span>';
+  let apiStatusText = data.api_status === 'ONLINE' ? '<span class="text-success">ONLINE</span>' : '<span class="text-danger">ERROR</span>';
   let html = `
   <div class="section-title"><span class="icon icon-btc">&#128181;</span>Live Trading Metrics</div>
   <div class="row g-4">
-    <div class="col-md-4">
+    <div class="col-md-3">
       <div class="card shadow"><div class="card-body">
         <h5 class="card-title"><span class="icon icon-usd">&#36;</span>USD Balance</h5>
         <p class="card-text display-6">$${Number(data.usd_balance).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
       </div></div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
       <div class="card shadow"><div class="card-body">
         <h5 class="card-title"><span class="icon icon-profit">&#x1F4B0;</span>Total Profit</h5>
         <p class="card-text display-6">$${Number(data.live_trading.total_profit).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
       </div></div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
       <div class="card shadow"><div class="card-body">
         <h5 class="card-title"><span class="icon icon-trade">&#128200;</span>P/L</h5>
         <p class="card-text display-6">$${Number(data.live_trading.pl_unrealized).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
+      </div></div>
+    </div>
+    <div class="col-md-3">
+      <div class="card shadow"><div class="card-body">
+        <h5 class="card-title"><span class="icon icon-server"></span>API Status</h5>
+        <p class="card-text display-6">${data.api_status === 'ONLINE' ? '<span class="text-success">&#9989; ONLINE</span>' : '<span class="text-danger">&#10060; ERROR</span>'}</p>
       </div></div>
     </div>
   </div>
@@ -636,25 +668,25 @@ function renderMetrics(data) {
   // Server/Bot Metrics
   html += `<div class="section-title"><span class="icon icon-server">&#128187;</span>Server & Bot Status Metrics</div>
   <div class="row g-4">
-    <div class="col-md-4">
+    <div class="col-md-3">
       <div class="card shadow"><div class="card-body">
-        <h5 class="card-title"><span class="icon icon-server">&#9200;</span>Flask Uptime</h5>
+        <h5 class="card-title"><span class="icon icon-server">&#9200;</span>Server Uptime</h5>
         <p class="card-text display-6">${Math.floor(data.server.flask_uptime/3600)}h ${Math.floor((data.server.flask_uptime%3600)/60)}m</p>
       </div></div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
       <div class="card shadow"><div class="card-body">
         <h5 class="card-title"><span class="icon icon-server">&#9881;&#65039;</span>CPU</h5>
         <p class="card-text display-6">${data.server.cpu_percent}%</p>
       </div></div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
       <div class="card shadow"><div class="card-body">
         <h5 class="card-title"><span class="icon icon-server">&#128421;&#65039;</span>RAM</h5>
         <p class="card-text display-6">${data.server.ram_percent}%</p>
       </div></div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
       <div class="card shadow"><div class="card-body">
         <h5 class="card-title"><span class="icon icon-server">&#128190;</span>Disk</h5>
         <p class="card-text display-6">${data.server.disk_percent}%</p>

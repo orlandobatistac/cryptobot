@@ -116,6 +116,11 @@ def setup_database():
         balance REAL,
         timestamp TEXT
     )''')
+    # Create bot_status table if not exists
+    c.execute('''CREATE TABLE IF NOT EXISTS bot_status (
+        bot_name TEXT PRIMARY KEY,
+        start_time TEXT
+    )''')
     # Insert initial balance record if none exists
     c.execute("SELECT balance FROM initial_balance ORDER BY id DESC LIMIT 1")
     initial_record = c.fetchone()
@@ -517,6 +522,26 @@ def notificaciones_habilitadas(tipo):
 # Register start time
 START_TIME = datetime.utcnow()
 
+def set_bot_start_time():
+    with DB_LOCK, sqlite3.connect(DB_FILE) as conn:
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS bot_status (
+            bot_name TEXT PRIMARY KEY,
+            start_time TEXT
+        )''')
+        c.execute("INSERT OR REPLACE INTO bot_status (bot_name, start_time) VALUES (?, ?)",
+                  ('live_paper', datetime.utcnow().isoformat()))
+        conn.commit()
+
+def get_bot_start_time():
+    with DB_LOCK, sqlite3.connect(DB_FILE) as conn:
+        c = conn.cursor()
+        c.execute("SELECT start_time FROM bot_status WHERE bot_name=?", ('live_paper',))
+        row = c.fetchone()
+        if row:
+            return datetime.fromisoformat(row[0])
+        return None
+
 def get_live_paper_metrics():
     """
     Get live metrics for the paper trading session.
@@ -541,8 +566,12 @@ def get_live_paper_metrics():
         'unrealized_profit': unrealized_profit,
         'balance': balance,
         'equity': balance + (unrealized_profit if unrealized_profit else 0),
-        'uptime': (datetime.utcnow() - START_TIME).total_seconds()
     }
+    start_time = get_bot_start_time()
+    if start_time:
+        metrics['uptime'] = (datetime.utcnow() - start_time).total_seconds()
+    else:
+        metrics['uptime'] = 0
     return metrics
 
 def main():
@@ -746,4 +775,5 @@ def main():
         print_session_summary()
 
 if __name__ == "__main__":
+    set_bot_start_time()
     main()
