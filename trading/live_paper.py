@@ -7,7 +7,7 @@ import signal, functools, os, time, sqlite3, json, threading, sys
 from collections import deque
 import pandas as pd, requests
 from datetime import datetime, timedelta
-from core.strategy import Strategy
+from core.strategy import Strategy, save_evaluation_to_db
 from utils.logger import logger
 from colorama import init, Fore, Style
 from tabulate import tabulate
@@ -64,7 +64,7 @@ def retry(ExceptionToCheck, tries=3, delay=2, backoff=2, logger=None):
     return deco_retry
 
 # Define the path to the configuration file
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
 
 def load_config():
     """
@@ -658,6 +658,19 @@ def main():
                     df.set_index("Timestamp", inplace=True)
                     strategy.calculate_indicators(df)
                     last_row = strategy.get_last_valid_row(df)
+                    # Guardar evaluación detallada (siempre, incluso si es HOLD)
+                    if last_row is not None:
+                        evaluation_details = {
+                            'timestamp': str(last_row.name),
+                            'decision': 'buy' if (not position and strategy.entry_signal(last_row, df, is_backtest=False)) else (
+                                'sell' if (position and strategy.exit_signal(last_row, df, is_backtest=False)) else 'hold'),
+                            'reason': '',  # Puedes agregar lógica para el motivo
+                            'indicators_state': {k: last_row.get(k, None) for k in ['sma_short','sma_long','rsi','macd','macd_signal','adx','volume_sma','bollinger_upper','bollinger_lower','supertrend'] if k in last_row},
+                            'strategy_conditions': {},  # Puedes agregar condiciones si lo deseas
+                            'price_at_evaluation': last_row['Close'] if 'Close' in last_row else None,
+                            'notes': None
+                        }
+                        save_evaluation_to_db(evaluation_details, 'live_paper')
                 except Exception as e:
                     logger.error(f"Error cargando/parsing datos OHLC: {e}")
                     last_row = None
