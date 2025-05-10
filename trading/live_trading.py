@@ -6,14 +6,13 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import os
 import sys
 import time
-import logging
 import signal
 import json
 from datetime import datetime
 from decimal import Decimal
 import krakenex
 from core.strategy import Strategy, save_evaluation_to_db
-from utils.logger import logger
+from utils.logger import get_live_trading_logger
 from colorama import Fore, Style, init
 from tabulate import tabulate
 from dotenv import load_dotenv
@@ -64,10 +63,12 @@ metrics = {
 RESULTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "results")
 DB_FILE = os.path.join(RESULTS_DIR, "cryptobot.db")
 
+live_logger = get_live_trading_logger()
+
 def _signal_handler(sig, frame):
     global RUNNING
     print("\nStopped by exit signal.\n")
-    logger.info("Exit signal received, stopping bot.")
+    live_logger.info("Exit signal received, stopping bot.")
     RUNNING = False
 
 signal.signal(signal.SIGINT, _signal_handler)
@@ -77,14 +78,14 @@ def get_account_balance(asset="ZUSD"):
     try:
         resp = k.query_private('Balance')
         if resp.get('error'):
-            logger.error(f"Kraken API error (Balance): {resp['error']}")
+            live_logger.error(f"Kraken API error (Balance): {resp['error']}")
             print(f"[ERROR] Kraken API error (Balance): {resp['error']}")
             return None
-        logger.info(f"[KRKN] Balance API OK. {asset}: {resp['result'].get(asset, 0)}")
+        live_logger.info(f"[KRKN] Balance API OK. {asset}: {resp['result'].get(asset, 0)}")
         print(f"[KRKN] Balance API OK. {asset}: {resp['result'].get(asset, 0)}")
         return float(resp['result'].get(asset, 0))
     except Exception as e:
-        logger.error(f"Exception in get_account_balance: {e}")
+        live_logger.error(f"Exception in get_account_balance: {e}")
         print(f"[ERROR] Exception in get_account_balance: {e}")
         return None
 
@@ -92,23 +93,23 @@ def get_asset_balance(asset="XXBT"):
     try:
         resp = k.query_private('Balance')
         if resp.get('error'):
-            logger.error(f"Kraken API error (Balance): {resp['error']}")
+            live_logger.error(f"Kraken API error (Balance): {resp['error']}")
             return None
         return float(resp['result'].get(asset, 0))
     except Exception as e:
-        logger.error(f"Exception in get_asset_balance: {e}")
+        live_logger.error(f"Exception in get_asset_balance: {e}")
         return None
 
 def get_realtime_price(pair):
     try:
         resp = k.query_public('Ticker', {'pair': pair})
         if resp.get('error'):
-            logger.error(f"Kraken API error (Ticker): {resp['error']}")
+            live_logger.error(f"Kraken API error (Ticker): {resp['error']}")
             return None
         ticker = resp['result'][list(resp['result'].keys())[0]]
         return float(ticker['c'][0])
     except Exception as e:
-        logger.error(f"Exception in get_realtime_price: {e}")
+        live_logger.error(f"Exception in get_realtime_price: {e}")
         return None
 
 def place_order(order_type, pair, volume, price=None):
@@ -123,25 +124,25 @@ def place_order(order_type, pair, volume, price=None):
             params['price'] = str(price)
         resp = k.query_private('AddOrder', params)
         if resp.get('error'):
-            logger.error(f"Kraken API error (AddOrder): {resp['error']}")
+            live_logger.error(f"Kraken API error (AddOrder): {resp['error']}")
             return None
         txid = resp['result']['txid'][0] if 'result' in resp and 'txid' in resp['result'] else None
-        logger.info(f"Order placed: {order_type} {volume} {pair} (txid: {txid})")
+        live_logger.info(f"Order placed: {order_type} {volume} {pair} (txid: {txid})")
         return txid
     except Exception as e:
-        logger.error(f"Exception in place_order: {e}")
+        live_logger.error(f"Exception in place_order: {e}")
         return None
 
 def check_order_status(txid):
     try:
         resp = k.query_private('QueryOrders', {'txid': txid})
         if resp.get('error'):
-            logger.error(f"Kraken API error (QueryOrders): {resp['error']}")
+            live_logger.error(f"Kraken API error (QueryOrders): {resp['error']}")
             return None
         status = resp['result'][txid]['status']
         return status
     except Exception as e:
-        logger.error(f"Exception in check_order_status: {e}")
+        live_logger.error(f"Exception in check_order_status: {e}")
         return None
 
 def print_trade_status(balance, btc_balance, realtime_price, position):
@@ -238,7 +239,7 @@ def get_live_trading_metrics():
 
 def main():
     print("\n[INFO] Starting LIVE trading mode (REAL MONEY).\n")
-    logger.info("Starting LIVE trading mode (REAL MONEY).")
+    live_logger.info("Starting LIVE trading mode (REAL MONEY).")
     strategy = Strategy()
     position = None
     global metrics
@@ -259,10 +260,10 @@ def main():
             btc_balance = get_asset_balance()
             realtime_price = get_realtime_price(PAIR)
             if balance is None:
-                logger.error("[CRITICAL] No se pudo obtener el balance de Kraken. El bot no puede operar.")
+                live_logger.error("[CRITICAL] No se pudo obtener el balance de Kraken. El bot no puede operar.")
                 print("[CRITICAL] No se pudo obtener el balance de Kraken. El bot no puede operar.")
             else:
-                logger.info(f"[CYCLE] Balance Kraken OK: {balance}")
+                live_logger.info(f"[CYCLE] Balance Kraken OK: {balance}")
                 print(f"[CYCLE] Balance Kraken OK: {balance}")
             # Update max balance and drawdown metrics
             if balance is not None:
@@ -288,8 +289,8 @@ def main():
                     last_candle_time = pd.Timestamp(last_row.name).floor(interval)
                 if last_candle_time is not None and last_candle_time != last_evaluated_candle:
                     last_evaluated_candle = last_candle_time
-                    print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Evaluating strategy (new candle)...\n")
-                    # Guardar evaluación detallada (siempre, incluso si es HOLD)
+                    live_logger.info(f"Evaluating strategy for new candle: {last_candle_time} (interval: {interval})")
+                    # Save detailed evaluation (always, even if HOLD)
                     evaluation_details = {
                         'timestamp': str(last_row.name),
                         'decision': 'buy' if (not position and strategy.entry_signal(last_row, df, is_backtest=False)) else (
@@ -300,27 +301,30 @@ def main():
                         'price_at_evaluation': last_row['Close'] if 'Close' in last_row else None,
                         'notes': None
                     }
+                    live_logger.info(f"[EVAL] Evaluation result: decision={evaluation_details['decision']}, price={evaluation_details['price_at_evaluation']}, indicators={evaluation_details['indicators_state']}, conditions={evaluation_details['strategy_conditions']}")
                     save_evaluation_to_db(evaluation_details, 'live_trading')
-                    # --- Lógica de trading ---
+                    # --- Trading logic ---
                     if not position and last_row is not None and df is not None:
                         if strategy.entry_signal(last_row, df, is_backtest=False):
-                            print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Entry signal detected.")
+                            live_logger.info("Entry signal detected. Attempting to place a buy order.")
                             invest_amount = balance * INVESTMENT_FRACTION
                             if invest_amount < 10:  # Kraken minimum for BTC/USD
+                                live_logger.warning("Investment amount too small for real trade.")
                                 print("[WARN] Investment amount too small for real trade.")
-                                logger.warning("Investment amount too small for real trade.")
                             else:
                                 volume = invest_amount / realtime_price
                                 if volume < MIN_TRADE_SIZE:
+                                    live_logger.warning("Volume below minimum trade size.")
                                     print("[WARN] Volume below minimum trade size.")
-                                    logger.warning("Volume below minimum trade size.")
                                 else:
                                     txid = place_order('buy', PAIR, volume)
                                     if txid:
+                                        live_logger.info(f"Buy order placed. Waiting for confirmation... (txid: {txid})")
                                         print(f"[LIVE] Buy order placed. Waiting for confirmation...")
                                         for _ in range(10):
                                             status = check_order_status(txid)
                                             if status == 'closed':
+                                                live_logger.info("Buy order filled.")
                                                 print(f"[LIVE] Buy order filled.")
                                                 break
                                             time.sleep(5)
@@ -341,16 +345,21 @@ def main():
                                         if notificaciones_habilitadas('order'):
                                             send_email(**format_order('compra'))
                                     else:
+                                        live_logger.error("Failed to place buy order.")
                                         print("[ERROR] Failed to place buy order.")
+                        else:
+                            live_logger.info("Decision: HOLD. No action taken.")
                     # EXIT
                     elif position and last_row is not None and df is not None and strategy.exit_signal(last_row, df, is_backtest=False):
-                        print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Exit signal detected.")
+                        live_logger.info("Exit signal detected. Attempting to place a sell order.")
                         txid = place_order('sell', PAIR, position['volume'])
                         if txid:
+                            live_logger.info(f"Sell order placed. Waiting for confirmation... (txid: {txid})")
                             print(f"[LIVE] Sell order placed. Waiting for confirmation...")
                             for _ in range(10):
                                 status = check_order_status(txid)
                                 if status == 'closed':
+                                    live_logger.info("Sell order filled.")
                                     print(f"[LIVE] Sell order filled.")
                                     break
                                 time.sleep(5)
@@ -369,19 +378,23 @@ def main():
                             if notificaciones_habilitadas('order'):
                                 send_email(**format_order('venta'))
                         else:
+                            live_logger.error("Failed to place sell order.")
                             print("[ERROR] Failed to place sell order.")
+                    else:
+                        live_logger.info("Decision: HOLD. No action taken.")
                 else:
+                    live_logger.info("Waiting for new candle to evaluate strategy...")
                     print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Waiting for new candle to evaluate strategy...\n")
             except Exception as e:
-                logger.error(f"Error cargando/parsing datos OHLC: {e}")
+                live_logger.error(f"Error cargando/parsing datos OHLC: {e}")
                 last_row = None
                 df = None
             time.sleep(60)
     except KeyboardInterrupt:
         print("\n[INFO] Stopping bot due to keyboard interrupt.\n")
-        logger.info("Stopping bot due to keyboard interrupt.")
+        live_logger.info("Stopping bot due to keyboard interrupt.")
     except Exception as e:
-        logger.error(f"Excepción crítica: {e}")
+        live_logger.error(f"Excepción crítica: {e}")
         if notificaciones_habilitadas('critical_error'):
             send_email(**format_critical_error())
         raise

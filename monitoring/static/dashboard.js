@@ -400,14 +400,52 @@ async function fetchLogs() {
 
     let html = `
     <div class="section-title"><span class="icon icon-logs">&#128203;</span>System Logs</div>
+    <div class="mb-2">
+      <button id="toggle-eval-logs" class="btn btn-outline-info btn-sm">Show Only [EVAL] Logs</button>
+    </div>
     <div class="card shadow">
       <div class="card-body">
         <h5 class="card-title"><span class="icon icon-logs">&#128203;</span>Latest Log Entries</h5>
-        <pre class="mt-3">${data.logs}</pre>
+        <pre class="mt-3" id="system-logs-pre">${data.logs
+          .split("\n")
+          .slice(-10)
+          .join("\n")}</pre>
       </div>
     </div>`;
 
     document.getElementById("logs-root").innerHTML = html;
+
+    // Add filter logic
+    const btn = document.getElementById("toggle-eval-logs");
+    const pre = document.getElementById("system-logs-pre");
+    let showingEval = false;
+    let allLogs = data.logs;
+    // Solo mostrar las últimas 10 líneas por defecto
+    let last10Logs = allLogs.split("\n").slice(-10).join("\n");
+    pre.textContent = last10Logs;
+    btn.onclick = function () {
+      if (!showingEval) {
+        // Mostrar solo las últimas 10 líneas que contienen [EVAL]
+        const evalLines = allLogs
+          .split("\n")
+          .filter((line) => line.includes("[EVAL]"));
+        const last10Eval = evalLines.slice(-10);
+        const filtered = last10Eval
+          .map(
+            (line) =>
+              `<span style='background:#222;color:#4ade80;font-weight:bold;'>${line}</span>`
+          )
+          .join("\n");
+        pre.innerHTML =
+          filtered || '<span class="text-warning">No [EVAL] logs found.</span>';
+        btn.textContent = "Show All Logs";
+        showingEval = true;
+      } else {
+        pre.textContent = last10Logs;
+        btn.textContent = "Show Only [EVAL] Logs";
+        showingEval = false;
+      }
+    };
   } catch (error) {
     console.error("Error fetching logs:", error);
   }

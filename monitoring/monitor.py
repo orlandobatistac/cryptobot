@@ -259,18 +259,17 @@ def metrics_api():
 @app.route("/logs")
 def logs_api():
     logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
-    log_path = os.path.join(logs_dir, 'debug.log')
+    # Show live_trading.log instead of debug.log
+    log_path = os.path.join(logs_dir, 'live_trading.log')
     if not os.path.exists(log_path):
-        # Create logs directory if it doesn't exist
         os.makedirs(logs_dir, exist_ok=True)
-        # Create empty file if it doesn't exist
         with open(log_path, 'w', encoding='utf-8') as f:
             f.write('')
     try:
         with open(log_path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
-        # Return last 20 lines
-        last_lines = lines[-20:]
+        # Return last 50 lines for more context
+        last_lines = lines[-50:]
         return jsonify({'logs': ''.join(last_lines)})
     except Exception as e:
         return jsonify({'logs': f'Error reading log file: {e}'})
