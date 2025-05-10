@@ -12,6 +12,8 @@ let metricsHistory = {
   times: [],
 };
 
+let detailedEvaluationsDataTable = null; // Variable para la instancia de DataTable
+
 // Function to format numbers
 function formatCurrency(value) {
   return new Intl.NumberFormat("en-US", {
@@ -333,8 +335,9 @@ function updateMetricsHistory(data) {
 
 // Render mini charts
 function renderMiniCharts() {
-  if (document.getElementById("balance-chart")) {
-    new Chart(document.getElementById("balance-chart"), {
+  const balanceChartElem = document.getElementById("balance-chart");
+  if (balanceChartElem && balanceChartElem.getContext) {
+    new Chart(balanceChartElem, {
       type: "line",
       data: {
         labels: metricsHistory.times.map((t) => t.toLocaleTimeString()),
@@ -360,8 +363,9 @@ function renderMiniCharts() {
     });
   }
 
-  if (document.getElementById("profit-chart")) {
-    new Chart(document.getElementById("profit-chart"), {
+  const profitChartElem = document.getElementById("profit-chart");
+  if (profitChartElem && profitChartElem.getContext) {
+    new Chart(profitChartElem, {
       type: "line",
       data: {
         labels: metricsHistory.times.map((t) => t.toLocaleTimeString()),
@@ -430,6 +434,254 @@ async function fetchMetrics() {
     return null;
   }
 }
+
+// --- DETAILED STRATEGY EVALUATIONS ---
+async function fetchDetailedEvaluations() {
+  try {
+    const response = await fetch("/api/strategy_evaluations_detailed"); // Podrías añadir ?limit=50
+    if (!response.ok) {
+      console.error(
+        `HTTP error! status: ${response.status}`,
+        await response.text()
+      );
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const evaluations = await response.json();
+    displayDetailedEvaluations(evaluations);
+  } catch (error) {
+    console.error("Error fetching detailed evaluations:", error);
+    const container = document.getElementById("detailed-evaluations-container");
+    if (container) {
+      container.innerHTML =
+        "<p>Error al cargar los detalles de evaluación. Ver la consola para más detalles.</p>";
+    }
+  }
+}
+
+function formatJsonForDisplay(jsonData) {
+  if (jsonData === null || jsonData === undefined) {
+    return "N/A";
+  }
+  if (typeof jsonData === "object") {
+    // Si hay un error de parseo, mostrarlo
+    if (jsonData.error && jsonData.raw_value) {
+      return `Error: ${jsonData.error}. Raw: <pre>${jsonData.raw_value}</pre>`;
+    }
+    if (jsonData.error) {
+      return `Error: ${jsonData.error}`;
+    }
+
+    let html = '<ul style="margin: 0; padding-left: 15px; font-size: 0.9em;">';
+    for (const key in jsonData) {
+      if (jsonData.hasOwnProperty(key)) {
+        let value = jsonData[key];
+        if (typeof value === "object" && value !== null) {
+          // Para sub-objetos, podrías simplemente convertirlos a string o formatearlos más
+          value = JSON.stringify(value, null, 2);
+          html += `<li><strong>${key}:</strong> <pre style="margin: 2px 0; white-space: pre-wrap; word-break: break-all;">${value}</pre></li>`;
+        } else {
+          html += `<li><strong>${key}:</strong> ${value}</li>`;
+        }
+      }
+    }
+    html += "</ul>";
+    if (Object.keys(jsonData).length === 0) {
+      return "Vacío";
+    }
+    return html;
+  }
+  return jsonData;
+}
+
+function badgeForDecision(decision) {
+  if (!decision) return '<span class="badge bg-secondary">N/A</span>';
+  const d = decision.toLowerCase();
+  if (d === "buy") return '<span class="badge bg-success">BUY</span>';
+  if (d === "sell") return '<span class="badge bg-danger">SELL</span>';
+  if (d === "hold") return '<span class="badge bg-secondary">HOLD</span>';
+  return `<span class="badge bg-info">${decision}</span>`;
+}
+
+function collapsibleJsonCell(jsonData, idPrefix) {
+  if (
+    !jsonData ||
+    (typeof jsonData === "object" && Object.keys(jsonData).length === 0)
+  ) {
+    return '<span class="text-muted">Vacío</span>';
+  }
+  const uid = idPrefix + "_" + Math.random().toString(36).substr(2, 6);
+  let short = "";
+  let full = "";
+  if (typeof jsonData === "object") {
+    short =
+      Object.keys(jsonData)
+        .slice(0, 2)
+        .map(
+          (k) =>
+            `<strong>${k}</strong>: ${
+              typeof jsonData[k] === "object"
+                ? JSON.stringify(jsonData[k])
+                : jsonData[k]
+            }`
+        )
+        .join(", ") + (Object.keys(jsonData).length > 2 ? ", ..." : "");
+    full = `<pre class='bg-dark text-light p-2 rounded' style='max-height:300px;overflow:auto;'>${JSON.stringify(
+      jsonData,
+      null,
+      2
+    )}</pre>`;
+  } else {
+    short = String(jsonData);
+    full = `<pre class='bg-dark text-light p-2 rounded'>${jsonData}</pre>`;
+  }
+  return `
+    <span>${short} <a href="#" class="text-info" data-bs-toggle="collapse" data-bs-target="#${uid}" aria-expanded="false" aria-controls="${uid}">[+]</a></span>
+    <div class="collapse mt-1" id="${uid}">${full}</div>
+  `;
+}
+
+function displayDetailedEvaluations(evaluations) {
+  const container = document.getElementById("detailed-evaluations-container");
+  if (!container) {
+    console.error("#detailed-evaluations-container not found.");
+    return;
+  }
+  // Card wrapper and section title
+  let html = `
+    <div class="section-title"><span class="icon icon-eval">&#128202;</span>STRATEGY EVALUATIONS</div>
+    <div class="row g-4">
+      <div class="col-12">
+        <div class="card shadow mb-4">
+          <div class="card-body">
+            <h5 class="card-title"><span class="icon icon-eval">&#128202;</span>Recent Strategy Evaluations</h5>
+            <div class="table-responsive">
+              <table class="table table-dark table-striped" id="detailed-evaluations-table">
+                <thead>
+                  <tr>
+                    <th>Timestamp</th>
+                    <th>Decision</th>
+                    <th>Price</th>
+                    <th>Reason</th>
+                    <th>Indicators</th>
+                    <th>Conditions</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  container.innerHTML = html;
+  const tableBody = document.querySelector("#detailed-evaluations-table tbody");
+  if (!tableBody) {
+    console.error("#detailed-evaluations-table tbody not found.");
+    return;
+  }
+  if (detailedEvaluationsDataTable) {
+    detailedEvaluationsDataTable.destroy();
+    detailedEvaluationsDataTable = null;
+  }
+  tableBody.innerHTML = "";
+  if (!evaluations || evaluations.length === 0) {
+    const row = tableBody.insertRow();
+    const cell = row.insertCell();
+    cell.colSpan = 7;
+    cell.textContent = "No detailed evaluation data available.";
+    cell.style.textAlign = "center";
+    return;
+  }
+  // Separate by bot
+  const bots = ["live_trading", "live_paper"];
+  bots.forEach((bot) => {
+    // Section header
+    const headerRow = tableBody.insertRow();
+    const headerCell = headerRow.insertCell();
+    headerCell.colSpan = 7;
+    headerCell.innerHTML = `<b>Bot: ${
+      bot === "live_trading" ? "Live Trading" : "Live Paper"
+    }</b>`;
+    headerCell.className = "table-primary";
+    headerCell.style.backgroundColor = "#ff5733"; // Cambia el color de fondo a un naranja más visible
+    headerCell.style.color = "#000000"; // Cambia el color de las letras a negro para contraste
+    // Evaluation rows
+    const botEvals = evaluations.filter((e) => e.bot_name === bot);
+    if (botEvals.length === 0) {
+      const row = tableBody.insertRow();
+      const cell = row.insertCell();
+      cell.colSpan = 7;
+      cell.textContent = "No recent evaluations.";
+      cell.style.textAlign = "center";
+    } else {
+      botEvals.forEach((evaluation, idx) => {
+        const row = tableBody.insertRow();
+        row.classList.add("align-middle");
+        // Timestamp
+        row.insertCell().textContent = evaluation.timestamp || "N/A";
+        // Decision with badge
+        row.insertCell().innerHTML = badgeForDecision(evaluation.decision);
+        // Price
+        row.insertCell().textContent =
+          evaluation.price_at_evaluation !== null &&
+          evaluation.price_at_evaluation !== undefined
+            ? Number(evaluation.price_at_evaluation).toFixed(2)
+            : "N/A";
+        // Reason with tooltip
+        const reasonCell = row.insertCell();
+        reasonCell.innerHTML = `<span data-bs-toggle="tooltip" data-bs-placement="top" title="${
+          evaluation.reason || ""
+        }">${(evaluation.reason || "").slice(0, 40)}${
+          evaluation.reason && evaluation.reason.length > 40 ? "..." : ""
+        }</span>`;
+        // Indicators (collapsible)
+        const indicatorsCell = row.insertCell();
+        indicatorsCell.innerHTML = collapsibleJsonCell(
+          evaluation.indicators_state,
+          bot + "_ind" + idx
+        );
+        // Conditions (collapsible)
+        const conditionsCell = row.insertCell();
+        conditionsCell.innerHTML = collapsibleJsonCell(
+          evaluation.strategy_conditions,
+          bot + "_cond" + idx
+        );
+        // Notes with tooltip
+        const notesCell = row.insertCell();
+        notesCell.innerHTML = `<span data-bs-toggle="tooltip" data-bs-placement="top" title="${
+          evaluation.notes || ""
+        }">${(evaluation.notes || "").slice(0, 30)}${
+          evaluation.notes && evaluation.notes.length > 30 ? "..." : ""
+        }</span>`;
+      });
+    }
+  });
+  // Enable Bootstrap tooltips
+  setTimeout(() => {
+    var tooltipTriggerList = [].slice.call(
+      document.querySelectorAll('[data-bs-toggle="tooltip"]')
+    );
+    tooltipTriggerList.map(function (tooltipTriggerEl) {
+      return new bootstrap.Tooltip(tooltipTriggerEl);
+    });
+  }, 300);
+}
+
+// Llama a las funciones cuando la página cargue
+document.addEventListener("DOMContentLoaded", () => {
+  fetchMetrics();
+  fetchLogs();
+  // fetchBtcChartData(); // Comentado para evitar error de función no definida
+  fetchDetailedEvaluations(); // Añadir la nueva función
+
+  setInterval(fetchMetrics, 10000); // cada 10s
+  setInterval(fetchLogs, 30000); // cada 30s
+  // No es necesario refrescar el gráfico de BTC tan frecuentemente a menos que cambie mucho
+  // setInterval(fetchBtcChartData, 60000 * 5); // cada 5 minutos
+  setInterval(fetchDetailedEvaluations, 60000 * 2); // cada 2 minutos
+});
 
 // Function to toggle between dark and light theme
 function toggleTheme() {

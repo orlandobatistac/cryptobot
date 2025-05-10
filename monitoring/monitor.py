@@ -161,7 +161,7 @@ def get_live_paper_metrics():
         conn.close()
     except Exception:
         pass
-    # Si no hay trades y el balance es 0, mostrar el initial_capital
+    # If there are no trades and the balance is 0, show the initial_capital
     if metrics['total_trades'] == 0 and metrics['balance'] == 0:
         metrics['balance'] = initial_capital
     start_time = get_bot_start_time('live_paper')
@@ -170,6 +170,51 @@ def get_live_paper_metrics():
     else:
         metrics['uptime'] = 0
     return metrics
+
+# --- DETAILED STRATEGY EVALUATIONS ---
+def get_detailed_strategy_evaluations(limit_per_bot=5):
+    results_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'results')
+    db_path = os.path.join(results_dir, 'cryptobot.db')
+    evaluations = []
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            # Obtener los últimos N registros por bot
+            bots = ['live_trading', 'live_paper']
+            for bot in bots:
+                c.execute('''
+                    SELECT timestamp, decision, reason, indicators_state, strategy_conditions, price_at_evaluation, notes, bot_name
+                    FROM strategy_evaluations
+                    WHERE bot_name = ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                ''', (bot, limit_per_bot))
+                for row in c.fetchall():
+                    eval_data = dict(row)
+                    # Parsear campos JSON
+                    try:
+                        eval_data['indicators_state'] = json.loads(row['indicators_state']) if row['indicators_state'] else {}
+                    except json.JSONDecodeError:
+                        eval_data['indicators_state'] = {"error": "Invalid JSON in indicators_state", "raw_value": row['indicators_state']}
+                    try:
+                        eval_data['strategy_conditions'] = json.loads(row['strategy_conditions']) if row['strategy_conditions'] else {}
+                    except json.JSONDecodeError:
+                        eval_data['strategy_conditions'] = {"error": "Invalid JSON in strategy_conditions", "raw_value": row['strategy_conditions']}
+                    evaluations.append(eval_data)
+    except sqlite3.Error as e:
+        logging.error(f"Database error in get_detailed_strategy_evaluations: {e}")
+    except Exception as e:
+        logging.error(f"Error fetching detailed evaluations: {e}")
+    # Ordenar por bot y timestamp descendente
+    evaluations.sort(key=lambda x: (x['bot_name'], x['timestamp']), reverse=True)
+    return evaluations
+
+@app.route('/api/strategy_evaluations_detailed')
+def strategy_evaluations_detailed_api():
+    # Solo las últimas 5 por bot
+    data = get_detailed_strategy_evaluations(limit_per_bot=5)
+    return jsonify(data)
 
 # --- SYSTEM METRICS ---
 def get_server_metrics():
@@ -216,9 +261,9 @@ def logs_api():
     logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
     log_path = os.path.join(logs_dir, 'debug.log')
     if not os.path.exists(log_path):
-        # Crear el directorio de logs si no existe
+        # Create logs directory if it doesn't exist
         os.makedirs(logs_dir, exist_ok=True)
-        # Crear el archivo vacío si no existe
+        # Create empty file if it doesn't exist
         with open(log_path, 'w', encoding='utf-8') as f:
             f.write('')
     try:

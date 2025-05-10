@@ -12,7 +12,7 @@ import json
 from datetime import datetime
 from decimal import Decimal
 import krakenex
-from core.strategy import Strategy
+from core.strategy import Strategy, save_evaluation_to_db
 from utils.logger import logger
 from colorama import Fore, Style, init
 from tabulate import tabulate
@@ -35,7 +35,7 @@ if not API_KEY or not API_SECRET:
 
 k = krakenex.API(key=API_KEY, secret=API_SECRET)
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
 with open(CONFIG_PATH, "r") as f:
     CONFIG = json.load(f)
 STRATEGY_CONFIG = CONFIG["strategy"]
@@ -243,6 +243,16 @@ def main():
     position = None
     global metrics
     
+    # --- NUEVO: Control de evaluación diaria ---
+    last_evaluated_candle = None
+    interval = CONFIG["data"]["interval"] if "data" in CONFIG and "interval" in CONFIG["data"] else "1D"
+    interval_seconds = {
+        '1D': 24 * 60 * 60,
+        '4H': 4 * 60 * 60,
+        '1W': 7 * 24 * 60 * 60,
+        '1H': 60 * 60,
+        '60min': 60 * 60,
+    }.get(interval, 24 * 60 * 60)  # Default 1D
     try:
         while RUNNING:
             balance = get_account_balance()
@@ -272,80 +282,100 @@ def main():
                 df.set_index("Timestamp", inplace=True)
                 strategy.calculate_indicators(df)
                 last_row = strategy.get_last_valid_row(df)
+                # --- NUEVO: Solo evaluar si hay nueva vela diaria ---
+                last_candle_time = None
+                if last_row is not None:
+                    last_candle_time = pd.Timestamp(last_row.name).floor(interval)
+                if last_candle_time is not None and last_candle_time != last_evaluated_candle:
+                    last_evaluated_candle = last_candle_time
+                    print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Evaluating strategy (new candle)...\n")
+                    # Guardar evaluación detallada (siempre, incluso si es HOLD)
+                    evaluation_details = {
+                        'timestamp': str(last_row.name),
+                        'decision': 'buy' if (not position and strategy.entry_signal(last_row, df, is_backtest=False)) else (
+                            'sell' if (position and strategy.exit_signal(last_row, df, is_backtest=False)) else 'hold'),
+                        'reason': '',
+                        'indicators_state': {k: last_row.get(k, None) for k in ['sma_short','sma_long','rsi','macd','macd_signal','adx','volume_sma','bollinger_upper','bollinger_lower','supertrend'] if k in last_row},
+                        'strategy_conditions': {},
+                        'price_at_evaluation': last_row['Close'] if 'Close' in last_row else None,
+                        'notes': None
+                    }
+                    save_evaluation_to_db(evaluation_details, 'live_trading')
+                    # --- Lógica de trading ---
+                    if not position and last_row is not None and df is not None:
+                        if strategy.entry_signal(last_row, df, is_backtest=False):
+                            print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Entry signal detected.")
+                            invest_amount = balance * INVESTMENT_FRACTION
+                            if invest_amount < 10:  # Kraken minimum for BTC/USD
+                                print("[WARN] Investment amount too small for real trade.")
+                                logger.warning("Investment amount too small for real trade.")
+                            else:
+                                volume = invest_amount / realtime_price
+                                if volume < MIN_TRADE_SIZE:
+                                    print("[WARN] Volume below minimum trade size.")
+                                    logger.warning("Volume below minimum trade size.")
+                                else:
+                                    txid = place_order('buy', PAIR, volume)
+                                    if txid:
+                                        print(f"[LIVE] Buy order placed. Waiting for confirmation...")
+                                        for _ in range(10):
+                                            status = check_order_status(txid)
+                                            if status == 'closed':
+                                                print(f"[LIVE] Buy order filled.")
+                                                break
+                                            time.sleep(5)
+                                        position = {
+                                            'entry_price': realtime_price,
+                                            'volume': volume,
+                                            'entry_time': datetime.utcnow()
+                                        }
+                                        metrics['trades_executed'] += 1
+                                        if 'trades_won' not in metrics:
+                                            metrics['trades_won'] = 0
+                                        metrics['last_trade'] = {
+                                            'type': 'buy',
+                                            'time': datetime.utcnow(),
+                                            'price': realtime_price,
+                                            'volume': volume
+                                        }
+                                        if notificaciones_habilitadas('order'):
+                                            send_email(**format_order('compra'))
+                                    else:
+                                        print("[ERROR] Failed to place buy order.")
+                    # EXIT
+                    elif position and last_row is not None and df is not None and strategy.exit_signal(last_row, df, is_backtest=False):
+                        print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Exit signal detected.")
+                        txid = place_order('sell', PAIR, position['volume'])
+                        if txid:
+                            print(f"[LIVE] Sell order placed. Waiting for confirmation...")
+                            for _ in range(10):
+                                status = check_order_status(txid)
+                                if status == 'closed':
+                                    print(f"[LIVE] Sell order filled.")
+                                    break
+                                time.sleep(5)
+                            profit = (realtime_price - position['entry_price']) * position['volume']
+                            metrics['total_profit'] += profit
+                            metrics['trades_executed'] += 1
+                            if profit > 0:
+                                metrics['trades_won'] = metrics.get('trades_won', 0) + 1
+                            metrics['last_trade'] = {
+                                'type': 'sell',
+                                'time': datetime.utcnow(),
+                                'price': realtime_price,
+                                'volume': position['volume']
+                            }
+                            position = None
+                            if notificaciones_habilitadas('order'):
+                                send_email(**format_order('venta'))
+                        else:
+                            print("[ERROR] Failed to place sell order.")
+                else:
+                    print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Waiting for new candle to evaluate strategy...\n")
             except Exception as e:
                 logger.error(f"Error cargando/parsing datos OHLC: {e}")
                 last_row = None
                 df = None
-            if not position and last_row is not None and df is not None:
-                if strategy.entry_signal(last_row, df, is_backtest=False):
-                    print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Entry signal detected.")
-                    invest_amount = balance * INVESTMENT_FRACTION
-                    if invest_amount < 10:  # Kraken minimum for BTC/USD
-                        print("[WARN] Investment amount too small for real trade.")
-                        logger.warning("Investment amount too small for real trade.")
-                    else:
-                        volume = invest_amount / realtime_price
-                        if volume < MIN_TRADE_SIZE:
-                            print("[WARN] Volume below minimum trade size.")
-                            logger.warning("Volume below minimum trade size.")
-                        else:
-                            txid = place_order('buy', PAIR, volume)
-                            if txid:
-                                print(f"[LIVE] Buy order placed. Waiting for confirmation...")
-                                for _ in range(10):
-                                    status = check_order_status(txid)
-                                    if status == 'closed':
-                                        print(f"[LIVE] Buy order filled.")
-                                        break
-                                    time.sleep(5)
-                                position = {
-                                    'entry_price': realtime_price,
-                                    'volume': volume,
-                                    'entry_time': datetime.utcnow()
-                                }
-                                metrics['trades_executed'] += 1
-                                if 'trades_won' not in metrics:
-                                    metrics['trades_won'] = 0
-                                metrics['last_trade'] = {
-                                    'type': 'buy',
-                                    'time': datetime.utcnow(),
-                                    'price': realtime_price,
-                                    'volume': volume
-                                }
-                                if notificaciones_habilitadas('order'):
-                                    send_email(**format_order('compra'))
-                            else:
-                                print("[ERROR] Failed to place buy order.")
-            # EXIT
-            elif position and last_row is not None and df is not None and strategy.exit_signal(last_row, df, is_backtest=False):
-                print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Exit signal detected.")
-                txid = place_order('sell', PAIR, position['volume'])
-                if txid:
-                    print(f"[LIVE] Sell order placed. Waiting for confirmation...")
-                    for _ in range(10):
-                        status = check_order_status(txid)
-                        if status == 'closed':
-                            print(f"[LIVE] Sell order filled.")
-                            break
-                        time.sleep(5)
-                    profit = (realtime_price - position['entry_price']) * position['volume']
-                    metrics['total_profit'] += profit
-                    metrics['trades_executed'] += 1
-                    if profit > 0:
-                        metrics['trades_won'] = metrics.get('trades_won', 0) + 1
-                    metrics['last_trade'] = {
-                        'type': 'sell',
-                        'time': datetime.utcnow(),
-                        'price': realtime_price,
-                        'volume': position['volume']
-                    }
-                    position = None
-                    if notificaciones_habilitadas('order'):
-                        send_email(**format_order('venta'))
-                else:
-                    print("[ERROR] Failed to place sell order.")
-            else:
-                print(f"{Fore.MAGENTA}[AUTO]{Style.RESET_ALL} Waiting for strategy evaluation...\n")
             time.sleep(60)
     except KeyboardInterrupt:
         print("\n[INFO] Stopping bot due to keyboard interrupt.\n")

@@ -52,6 +52,10 @@
       <!-- All metrics content will be rendered here by JS -->
     </div>
 
+    <div class="container py-4" id="detailed-evaluations-container">
+      <!-- Detailed evaluations will be rendered here by JS -->
+    </div>
+
     <div class="container py-4" id="logs-root">
       <!-- Logs will be rendered here by JS -->
     </div>
@@ -66,6 +70,7 @@
       </div>
     </footer>
 
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
   </body>
 </html>

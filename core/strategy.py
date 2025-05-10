@@ -10,6 +10,7 @@ import json
 from utils.logger import logger
 from functools import wraps
 import datetime
+import sqlite3
 
 def log_debug(func):
     @wraps(func)
@@ -396,4 +397,60 @@ class Strategy:
             logger.error(f"Error in exit_signal: {e}")
             return False
 
-logger.debug("Finished execution of strategy.py")
+def save_evaluation_to_db(evaluation_details, bot_name):
+    """
+    Guarda los detalles de la evaluación de la estrategia en la base de datos.
+    :param evaluation_details: dict con los campos relevantes
+    :param bot_name: 'live_trading' o 'live_paper'
+    """
+    results_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'results')
+    db_path = os.path.join(results_dir, 'cryptobot.db')
+    create_table_sql = '''
+    CREATE TABLE IF NOT EXISTS strategy_evaluations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT,
+        decision TEXT,
+        reason TEXT,
+        indicators_state TEXT,
+        strategy_conditions TEXT,
+        price_at_evaluation REAL,
+        notes TEXT,
+        bot_name TEXT
+    );
+    '''
+    # --- Serialización segura y logging ---
+    try:
+        # Convertir todos los valores a tipos nativos de Python para evitar errores de serialización
+        def safe_convert(val):
+            if isinstance(val, (float, int, str, type(None))):
+                return val
+            try:
+                return float(val)
+            except Exception:
+                return str(val)
+        indicators_state = evaluation_details.get('indicators_state', {})
+        indicators_state_safe = {k: safe_convert(v) for k, v in indicators_state.items()}
+        strategy_conditions = evaluation_details.get('strategy_conditions', {})
+        strategy_conditions_safe = {k: safe_convert(v) for k, v in strategy_conditions.items()}
+        logger.info(f"[DB] Guardando evaluación: ts={evaluation_details.get('timestamp')}, decision={evaluation_details.get('decision')}, bot={bot_name}")
+        with sqlite3.connect(db_path) as conn:
+            c = conn.cursor()
+            c.execute(create_table_sql)
+            c.execute('''
+                INSERT INTO strategy_evaluations (
+                    timestamp, decision, reason, indicators_state, strategy_conditions, price_at_evaluation, notes, bot_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                evaluation_details.get('timestamp'),
+                evaluation_details.get('decision'),
+                evaluation_details.get('reason'),
+                json.dumps(indicators_state_safe),
+                json.dumps(strategy_conditions_safe),
+                evaluation_details.get('price_at_evaluation'),
+                evaluation_details.get('notes'),
+                bot_name
+            ))
+            conn.commit()
+        logger.info(f"[DB] Evaluación guardada correctamente para {bot_name} en {evaluation_details.get('timestamp')}")
+    except Exception as e:
+        logger.error(f"[DB] Error guardando evaluación: {e}")
