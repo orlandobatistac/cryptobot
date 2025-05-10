@@ -1,22 +1,25 @@
 # main.py
 
-from logger import logger
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), ".")))
+
+from utils.logger import logger
 from functools import wraps
 from tqdm import tqdm
 from colorama import Fore, Style
-from data import DataHandler
-from strategy import Strategy
-from backtest import Backtester
+from core.data import DataHandler
+from core.strategy import Strategy
+from core.backtest import Backtester
 from datetime import datetime
 import json
-import os
 import shutil
 import logging
 import pandas as pd
 import numpy as np
 import subprocess
-import sys
-from notifications import load_config, send_email, format_critical_error
+from utils.notifications import load_config, send_email, format_critical_error
 
 # Load configuration from config.json
 with open("config.json", "r") as config_file:
@@ -41,7 +44,9 @@ def clear_logs():
     Clear or empty the main log file.
     """
     try:
-        with open('debug.log', 'w') as f:
+        logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+        log_file_path = os.path.join(logs_dir, 'debug.log')
+        with open(log_file_path, 'w') as f:
             f.truncate(0)
     except FileNotFoundError:
         pass
@@ -265,7 +270,7 @@ if __name__ == "__main__":
             try:
                 if enable_optimization:
                     logger.info("Optimization enabled. Starting process...")
-                    from optimize import run_optimization
+                    from core.optimize import run_optimization
 
                     def progress_callback(study, trial):
                         if pbar.n < pbar.total:

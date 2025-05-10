@@ -1,4 +1,8 @@
-from strategy import Strategy
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core.strategy import Strategy
 import pandas as pd
 
 # Load data

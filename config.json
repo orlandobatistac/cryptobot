@@ -5,9 +5,9 @@
     "spread": 0.00015,
     "slippage": 0.0001,
     "investment_fraction": 1.0,
-    "log_file": "debug.log",
+    "log_file": "logs/debug.log",
     "results_cleanup_limit": 5,
-    "enable_optimization": false,
+    "enable_optimization": true,
     "generate_sample_data": false,
     "lateral_mode": true
   },

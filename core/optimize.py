@@ -1,21 +1,29 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 import optuna
 import json
-from data import DataHandler
-from strategy import Strategy
-from backtest import Backtester
+from core.data import DataHandler
+from core.strategy import Strategy
+from core.backtest import Backtester
 import os
 import warnings
 import datetime
 import logging
 from main import clean_old_results
-from logger import logger
+from utils.logger import logger
 
 warnings.filterwarnings("ignore")
 
 # Clear the debug.log file at the start of the script
 def clear_debug_log():
     try:
-        with open("debug.log", "w") as f:
+        logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        log_file_path = os.path.join(logs_dir, "debug.log")
+        with open(log_file_path, "w") as f:
             f.truncate(0)
     except FileNotFoundError:
         pass
@@ -23,8 +31,10 @@ def clear_debug_log():
 clear_debug_log()  # Call the function to clear the log file
 
 # Configure logging to write to a file
+logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+log_file_path = os.path.join(logs_dir, "debug.log")
 logging.basicConfig(
-    filename="debug.log",
+    filename=log_file_path,
     level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
@@ -129,8 +139,12 @@ def objective(trial):
         return -9999  # Penalize configurations that fail
 
 def run_optimization(callback=None):
+    optimization_dir = base_config["optimization"]["optimization_results_dir"]
+    os.makedirs(optimization_dir, exist_ok=True)
+    optuna_db_path = os.path.join(optimization_dir, "optuna_study.db")
+    
     study = optuna.create_study(
-        storage="sqlite:///optuna_study.db",
+        storage=f"sqlite:///{optuna_db_path}",
         study_name="trading_strategy",
         direction="maximize",
         load_if_exists=True
@@ -173,7 +187,9 @@ def run_optimization(callback=None):
 
 if __name__ == "__main__":
     best_params = run_optimization()
-    study = optuna.load_study(study_name="trading_strategy", storage="sqlite:///optuna_study.db")
+    optimization_dir = base_config["optimization"]["optimization_results_dir"]
+    optuna_db_path = os.path.join(optimization_dir, "optuna_study.db")
+    study = optuna.load_study(study_name="trading_strategy", storage=f"sqlite:///{optuna_db_path}")
     print("\nBest configuration:")
     print(json.dumps(best_params, indent=4))
     print(f"\nBest pl_percent: {study.best_value:.2f}%")

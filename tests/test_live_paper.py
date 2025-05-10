@@ -1,7 +1,12 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 import unittest
 from unittest.mock import patch, MagicMock
 import sqlite3
-from live_paper import get_realtime_price, save_trade, get_open_position
+from trading.live_paper import get_realtime_price, save_trade, get_open_position
 
 class TestLivePaper(unittest.TestCase):
     def setUp(self):

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CryptoBot Monitor</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='styles.css') }}"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <nav class="navbar navbar-dark">
+      <div class="container-fluid">
+        <span class="navbar-brand mb-0 h1">CryptoBot Dashboard</span>
+        <div class="d-flex align-items-center">
+          <span class="theme-toggle me-3" onclick="toggleTheme()">☾</span>
+          <span class="text-secondary" id="now">{{ now }}</span>
+        </div>
+      </div>
+    </nav>
+
+    <div class="container py-4">
+      <div class="row">
+        <div class="col">
+          <div class="card shadow mb-4">
+            <div class="card-body">
+              <iframe
+                src="/btc_chart"
+                width="100%"
+                height="750"
+                style="border: none; background: #181a1b"
+              ></iframe>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="container py-4" id="metrics-root">
+      <!-- All metrics content will be rendered here by JS -->
+    </div>
+
+    <div class="container py-4" id="logs-root">
+      <!-- Logs will be rendered here by JS -->
+    </div>
+
+    <footer class="py-4 mt-5">
+      <div class="container">
+        <div class="row">
+          <div class="col text-center text-secondary">
+            <p>CryptoBot Dashboard - v1.0.0</p>
+          </div>
+        </div>
+      </div>
+    </footer>
+
+    <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+  </body>
+</html>

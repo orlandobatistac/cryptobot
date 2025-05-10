@@ -45,7 +45,7 @@ cryptobot/
 ├── strategy.py               # Indicators + entry/exit logic
 ├── requirements.txt          # Python dependencies
 ├── debug.log                 # Execution logs
-├── paper_trades.db           # SQLite database for paper trading
+├── cryptobot.db           # SQLite database for paper trading
 ├── README.md                 # You’re here!
 ├── data/
 │   ├── update_data.py        # Script to update/download OHLC data
@@ -67,7 +67,7 @@ cryptobot/
 - **data/update_data.py**: Downloads and updates OHLC data from Kraken, handles incremental updates and logging.
 - **data/check_data.py**: Inspects, validates, and summarizes OHLC data files; can fetch and compare with Kraken API.
 - **logger.py**: Centralized logging to debug.log.
-- **paper_trades.db**: SQLite database for storing simulated trades.
+- **cryptobot.db**: SQLite database for storing simulated trades.
 
 ---
 

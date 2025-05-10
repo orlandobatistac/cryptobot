@@ -1,0 +1,318 @@
+/* 
+   Separate stylesheet for the CryptoBot dashboard
+   Improves organization and makes maintenance easier
+*/
+
+:root {
+  --main-bg: #181a1b;
+  --card-bg: #23272f;
+  --accent-color: #7fd7ff;
+  --accent-color-hover: #60c5f0;
+  --text-color: #f3f6fa;
+  --success-color: #4ade80;
+  --danger-color: #f87171;
+  --secondary-color: #a5b4fc;
+  --border-color: #2d323c;
+}
+
+body {
+  background: var(--main-bg);
+  color: var(--text-color);
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Oxygen, Ubuntu, Cantarell, sans-serif;
+}
+
+.card {
+  background: var(--card-bg);
+  color: var(--text-color);
+  border: none;
+  border-radius: 1rem;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2) !important;
+}
+
+.table-dark {
+  --bs-table-bg: var(--card-bg);
+}
+
+.navbar {
+  background: linear-gradient(90deg, var(--main-bg) 0%, var(--card-bg) 100%);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.section-title {
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+  font-size: 1.7rem;
+  color: #fff;
+  font-weight: 900;
+  letter-spacing: 1px;
+  text-shadow: 0 2px 12px rgba(0, 122, 204, 0.6), 0 1px 8px #000;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  border-left: 5px solid var(--accent-color);
+  padding-left: 0.5em;
+}
+
+.section-title .icon {
+  font-size: 1.5em;
+  margin-right: 0.3em;
+}
+
+.card-title {
+  color: var(--accent-color);
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  font-size: 1.2rem;
+  text-shadow: 0 1px 8px rgba(0, 122, 204, 0.27);
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+}
+
+.card-title .icon {
+  font-size: 1.1em;
+}
+
+.display-6 {
+  font-weight: bold;
+  color: #fff;
+}
+
+.text-success {
+  color: var(--success-color) !important;
+}
+
+.text-danger {
+  color: var(--danger-color) !important;
+}
+
+.text-secondary {
+  color: var(--secondary-color) !important;
+}
+
+.badge.bg-success {
+  background: linear-gradient(90deg, var(--success-color) 0%, #256d4f 100%);
+  color: var(--main-bg);
+  font-size: 1em;
+}
+
+pre {
+  background: var(--main-bg);
+  color: var(--accent-color);
+  border: 1px solid var(--card-bg);
+}
+
+.card.shadow {
+  box-shadow: 0 0 16px 0 rgba(127, 215, 255, 0.13),
+    0 2px 4px 0 rgba(0, 0, 0, 0.67);
+}
+
+.navbar-brand {
+  color: var(--accent-color) !important;
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+
+.highlight {
+  color: var(--accent-color);
+  font-weight: bold;
+}
+
+.card-body {
+  border-radius: 0.5rem;
+}
+
+.table-dark th,
+.table-dark td {
+  border-color: var(--border-color);
+}
+
+.card-title,
+.section-title {
+  text-shadow: 0 2px 8px var(--main-bg);
+}
+
+.card .card-title {
+  font-size: 1.1rem;
+}
+
+.card .card-text {
+  font-size: 1.3rem;
+}
+
+.row.g-4 {
+  row-gap: 1.5rem;
+}
+
+.table-dark {
+  color: var(--text-color);
+}
+
+.table-dark tr {
+  background: var(--card-bg);
+}
+
+.table-dark th {
+  color: var(--accent-color);
+  font-size: 1.1em;
+  font-weight: 700;
+}
+
+.table-dark td {
+  color: var(--text-color);
+}
+
+.alert-danger {
+  background: var(--border-color);
+  color: var(--danger-color);
+  border: none;
+}
+
+/* Icons with specific colors */
+.icon-btc {
+  color: #f7931a;
+}
+
+.icon-usd {
+  color: var(--success-color);
+}
+
+.icon-profit {
+  color: var(--success-color);
+}
+
+.icon-loss {
+  color: var(--danger-color);
+}
+
+.icon-trade {
+  color: var(--accent-color);
+}
+
+.icon-server {
+  color: var(--secondary-color);
+}
+
+.icon-paper {
+  color: #ffd700;
+}
+
+.icon-logs {
+  color: #ffb300;
+}
+
+/* New animations and effects */
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-pulse {
+  animation: pulse 2s infinite ease-in-out;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--main-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-color);
+}
+
+/* Dark/light theme system */
+.theme-toggle {
+  cursor: pointer;
+  color: var(--text-color);
+  font-size: 1.2em;
+  margin-right: 15px;
+}
+
+/* Custom tooltip */
+.custom-tooltip {
+  position: relative;
+  display: inline-block;
+}
+
+.custom-tooltip .tooltip-text {
+  visibility: hidden;
+  width: 120px;
+  background-color: var(--border-color);
+  color: var(--text-color);
+  text-align: center;
+  border-radius: 6px;
+  padding: 5px;
+  position: absolute;
+  z-index: 1;
+  bottom: 125%;
+  left: 50%;
+  margin-left: -60px;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.custom-tooltip:hover .tooltip-text {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* New UI elements */
+.profit-chart {
+  height: 100px;
+  background: var(--card-bg);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-top: 15px;
+}
+
+.refresh-button {
+  color: var(--accent-color);
+  background: none;
+  border: none;
+  font-size: 1.2em;
+  cursor: pointer;
+  transition: transform 0.3s ease;
+}
+
+.refresh-button:hover {
+  transform: rotate(180deg);
+}
+
+/* Improved responsive design */
+@media (max-width: 768px) {
+  .card {
+    margin-bottom: 15px;
+  }
+
+  .section-title {
+    font-size: 1.4rem;
+  }
+
+  .display-6 {
+    font-size: 1.5rem;
+  }
+}

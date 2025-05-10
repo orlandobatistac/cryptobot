@@ -6,8 +6,12 @@ from datetime import datetime
 import logging
 
 # Configure logging
+logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+os.makedirs(logs_dir, exist_ok=True)
+log_file_path = os.path.join(logs_dir, "debug.log")
+
 logging.basicConfig(
-    filename="debug.log",
+    filename=log_file_path,
     level=logging.ERROR,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )

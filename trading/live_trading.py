@@ -1,3 +1,8 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 import os
 import sys
 import time
@@ -7,12 +12,12 @@ import json
 from datetime import datetime
 from decimal import Decimal
 import krakenex
-from strategy import Strategy
-from logger import logger
+from core.strategy import Strategy
+from utils.logger import logger
 from colorama import Fore, Style, init
 from tabulate import tabulate
 from dotenv import load_dotenv
-from notifications import load_config, send_email, format_critical_error, format_order
+from utils.notifications import load_config, send_email, format_critical_error, format_order
 import pandas as pd
 import sqlite3
 
@@ -56,7 +61,8 @@ metrics = {
     'max_balance': 0.0,
 }
 
-DB_FILE = "paper_trades.db"
+RESULTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "results")
+DB_FILE = os.path.join(RESULTS_DIR, "cryptobot.db")
 
 def _signal_handler(sig, frame):
     global RUNNING
@@ -196,6 +202,9 @@ def notificaciones_habilitadas(tipo):
     return notif.get('enabled', False) and notif.get('types', {}).get(tipo, False)
 
 def set_bot_start_time():
+    # Ensure the results directory exists
+    os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
+    
     with sqlite3.connect(DB_FILE) as conn:
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS bot_status (

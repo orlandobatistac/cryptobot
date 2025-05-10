@@ -1,7 +1,12 @@
-import pandas as pd
+import sys
 import os
-from logger import logger
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+import pandas as pd
+from utils.logger import logger
 from functools import wraps
+import os
 
 def log_debug(func):
     @wraps(func)

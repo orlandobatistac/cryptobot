@@ -1,12 +1,17 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 import signal, functools, os, time, sqlite3, json, threading, sys
 from collections import deque
 import pandas as pd, requests
 from datetime import datetime, timedelta
-from strategy import Strategy
-from logger import logger
+from core.strategy import Strategy
+from utils.logger import logger
 from colorama import init, Fore, Style
 from tabulate import tabulate
-from notifications import load_config, send_email, format_critical_error, format_order, format_analysis
+from utils.notifications import load_config, send_email, format_critical_error, format_order, format_analysis
 
 try:
     from inputimeout import inputimeout, TimeoutOccurred
@@ -84,7 +89,8 @@ k = krakenex.API()
 # Parameters
 PAIR = "XXBTZUSD"  # BTC/USD
 INTERVAL = 1  # minutes (monitoring interval)
-DB_FILE = "paper_trades.db"
+RESULTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "results")
+DB_FILE = os.path.join(RESULTS_DIR, "cryptobot.db")
 
 # Initialize threading lock for database operations
 DB_LOCK = threading.Lock()
@@ -96,6 +102,9 @@ def setup_database():
     Raises:
         sqlite3.OperationalError: On database operation failure.
     """
+    # Ensure the results directory exists
+    os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
+    
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     # Create trades table with correct columns

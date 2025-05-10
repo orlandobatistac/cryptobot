@@ -1,3 +1,8 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 # backtest.py
 
 import pandas as pd
@@ -5,7 +10,7 @@ import numpy as np
 import mplfinance as mpf
 import os
 from datetime import datetime
-from logger import logger
+from utils.logger import logger
 from functools import wraps
 import json
 
