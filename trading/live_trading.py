@@ -300,23 +300,27 @@ def main():
                         'strategy_conditions': {},
                         'price_at_evaluation': last_row['Close'] if 'Close' in last_row else None,
                         'notes': None
-                    }
+                    }                    
                     live_logger.info(f"[EVAL] Evaluation result: decision={evaluation_details['decision']}, price={evaluation_details['price_at_evaluation']}, indicators={evaluation_details['indicators_state']}, conditions={evaluation_details['strategy_conditions']}")
                     save_evaluation_to_db(evaluation_details, 'live_trading')
                     # --- Trading logic ---
                     if not position and last_row is not None and df is not None:
                         if strategy.entry_signal(last_row, df, is_backtest=False):
                             live_logger.info("Entry signal detected. Attempting to place a buy order.")
+                            live_logger.info(f"Balance: {balance}, INVESTMENT_FRACTION: {INVESTMENT_FRACTION}")
                             invest_amount = balance * INVESTMENT_FRACTION
+                            live_logger.info(f"Investment amount calculated: ${invest_amount:.2f}")
                             if invest_amount < 10:  # Kraken minimum for BTC/USD
-                                live_logger.warning("Investment amount too small for real trade.")
-                                print("[WARN] Investment amount too small for real trade.")
+                                live_logger.warning(f"Investment amount too small for real trade (minimum $10.00, got ${invest_amount:.2f}).")
+                                print(f"[WARN] Investment amount too small for real trade (minimum $10.00, got ${invest_amount:.2f}).")
                             else:
                                 volume = invest_amount / realtime_price
+                                live_logger.info(f"Volume calculated: {volume:.6f} BTC (price: ${realtime_price:.2f})")
                                 if volume < MIN_TRADE_SIZE:
-                                    live_logger.warning("Volume below minimum trade size.")
-                                    print("[WARN] Volume below minimum trade size.")
+                                    live_logger.warning(f"Volume below minimum trade size. Required: {MIN_TRADE_SIZE}, Got: {volume:.6f}")
+                                    print(f"[WARN] Volume below minimum trade size. Required: {MIN_TRADE_SIZE}, Got: {volume:.6f}")
                                 else:
+                                    live_logger.info(f"Placing buy order: {volume:.6f} BTC at market price (approx. ${realtime_price:.2f})")
                                     txid = place_order('buy', PAIR, volume)
                                     if txid:
                                         live_logger.info(f"Buy order placed. Waiting for confirmation... (txid: {txid})")

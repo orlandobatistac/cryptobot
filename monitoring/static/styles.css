@@ -316,3 +316,35 @@ pre {
     font-size: 1.5rem;
   }
 }
+
+.status-badge {
+  font-size: 1.1em;
+  font-weight: 600;
+  padding: 0.4em 1em;
+  border-radius: 1em;
+  margin-right: 0.5em;
+}
+#status-live-trading,
+#status-live-paper {
+  font-size: 1.1em;
+  font-weight: 600;
+  padding: 0.4em 1em;
+  border-radius: 1em;
+}
+#countdown-live-trading,
+#countdown-live-paper {
+  font-size: 1.2em;
+  color: var(--accent-color);
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+.card .card-body.d-flex {
+  background: #23272f;
+  border-radius: 0.7em;
+}
+@media (max-width: 600px) {
+  #countdown-live-trading,
+  #countdown-live-paper {
+    font-size: 1em;
+  }
+}

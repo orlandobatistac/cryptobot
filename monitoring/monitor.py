@@ -9,7 +9,7 @@ logging.getLogger().setLevel(logging.WARNING)
 from flask import Flask, render_template, jsonify, Response
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 import krakenex
 import sqlite3
@@ -212,9 +212,96 @@ def get_detailed_strategy_evaluations(limit_per_bot=5):
 
 @app.route('/api/strategy_evaluations_detailed')
 def strategy_evaluations_detailed_api():
-    # Solo las últimas 5 por bot
+    # Get evaluations as before
     data = get_detailed_strategy_evaluations(limit_per_bot=5)
-    return jsonify(data)
+    
+    # --- New: Add status and next evaluation info for each bot ---
+    bots = ['live_trading', 'live_paper']
+    now = int(time.time())
+    status_info = {}
+    
+    # Use the opening of the daily candle for determining evaluation time
+    try:
+        # Load the OHLC data to get the daily candle information
+        df = pd.read_parquet(os.path.join("data", "ohlc_data_60min_all_years.parquet"))
+        df['Timestamp'] = pd.to_datetime(df['Timestamp'])
+        df.set_index('Timestamp', inplace=True)
+        # Resample to daily candles
+        df_1d = df.resample('1D', closed='left', label='left').agg({
+            'Open': 'first',
+            'High': 'max',
+            'Low': 'min',
+            'Close': 'last',
+            'Volume': 'sum'
+        })
+        df_1d = df_1d.dropna()
+        # Get the current daily candle's opening time (start of the day candle)
+        current_date = datetime.now()
+        today_date = current_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Find the most recent candle opening time
+        candle_open_times = df_1d.index
+        # Find the current daily candle open time (the most recent one)
+        current_candle_open = max([ts for ts in candle_open_times if ts <= pd.Timestamp(current_date)])
+        next_candle_open = current_candle_open + pd.Timedelta(days=1)
+        # Use the next daily candle opening time as evaluation time
+        next_eval_ts = int(next_candle_open.timestamp())
+        # If there hasn't been an evaluation yet since the current candle opened,
+        # schedule one immediately rather than waiting for the next candle
+        current_candle_open_ts = int(current_candle_open.timestamp())
+        # Check if we already had an evaluation for the current candle period
+        current_candle_evals_exist = False
+        for bot_name in bots:
+            current_candle_evals = [e for e in data if e['bot_name'] == bot_name and 
+                                   int(datetime.fromisoformat(e['timestamp']).timestamp()) >= current_candle_open_ts]
+            if current_candle_evals:
+                current_candle_evals_exist = True
+                break
+        # If no evaluations happened yet for the current daily candle, schedule one now
+        if not current_candle_evals_exist:
+            next_eval_ts = current_candle_open_ts
+            logging.info(f"No evaluations found for current candle period, scheduling evaluation immediately")
+        # Log the scheduled evaluation time
+        logging.info(f"Next evaluation based on daily candle opening will be at: {datetime.fromtimestamp(next_eval_ts)}")
+        logging.info(f"Time remaining: {(next_eval_ts - now)//3600}h {((next_eval_ts - now)%3600)//60}m {((next_eval_ts - now)%60)}s")
+    except Exception as e:
+        logging.error(f"Error calculating next evaluation time using daily candles: {e}")
+        # Fallback mechanism if data loading or calculation fails
+        try:
+            # Get current time
+            current_date = datetime.now()
+            # Get current day start as fallback
+            current_day_start = current_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            # Next day start as fallback for next candle
+            next_day_start = current_day_start + timedelta(days=1)
+            next_eval_ts = int(next_day_start.timestamp())
+            logging.warning(f"Using fallback calculation for evaluation time: {datetime.fromtimestamp(next_eval_ts)}")
+        except Exception as inner_e:
+            logging.error(f"Even fallback calculation failed: {inner_e}")
+            # Ultimate fallback - 24 hours from now
+            next_eval_ts = now + 86400
+    
+    for bot in bots:
+        # Find last evaluation for this bot (useful for status info)
+        last_eval = next((e for e in data if e['bot_name'] == bot), None)
+        eval_status = 'Waiting for next evaluation'
+        
+        # Show more descriptive status if available from last evaluation
+        if last_eval:
+            last_decision = last_eval.get('decision', '').lower()
+            if last_decision == 'buy':
+                eval_status = 'Signal: BUY - Waiting for next evaluation'
+            elif last_decision == 'sell':
+                eval_status = 'Signal: SELL - Waiting for next evaluation'
+                
+        status_info[bot] = {
+            'status': eval_status,
+            'next_evaluation_ts': next_eval_ts
+        }
+    return jsonify({
+        'evaluations': data,
+        'status_info': status_info,
+        'now': now
+    })
 
 # --- SYSTEM METRICS ---
 def get_server_metrics():
@@ -289,9 +376,6 @@ def btc_chart_data():
         df_1d = df_1d.dropna()
         df_1d['SMA59'] = df_1d['Close'].rolling(window=59).mean()
         df_1d['SMA200'] = df_1d['Close'].rolling(window=200).mean()
-        # Convert NaN to None for JSON serialization
-        def safe_list(series):
-            return [None if (pd.isna(x) or (isinstance(x, float) and np.isnan(x))) else x for x in series]
         # Current price
         last_close = float(df_1d['Close'].iloc[-1]) if not df_1d.empty else None
         now_price = get_realtime_price(PAIR)
@@ -314,6 +398,8 @@ def btc_chart_data():
         except Exception as e:
             pass
         # Serialize data for Plotly
+        def safe_list(series):
+            return [None if (pd.isna(x) or (isinstance(x, float) and np.isnan(x))) else x for x in series]
         data = {
             'x': df_1d.index.strftime('%Y-%m-%d').tolist(),
             'open': safe_list(df_1d['Open']),
@@ -327,7 +413,8 @@ def btc_chart_data():
             'last_close': last_close,
             'buy_signals': buy_signals,
             'sell_signals': sell_signals
-        }        # Equity de Live Trading
+        }
+        # Equity de Live Trading
         try:
             equity = []
             results_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'results')

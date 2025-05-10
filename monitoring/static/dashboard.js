@@ -397,15 +397,14 @@ async function fetchLogs() {
   try {
     const res = await fetch("/logs");
     const data = await res.json();
-
     let html = `
     <div class="section-title"><span class="icon icon-logs">&#128203;</span>System Logs</div>
-    <div class="mb-2">
-      <button id="toggle-eval-logs" class="btn btn-outline-info btn-sm">Show Only [EVAL] Logs</button>
-    </div>
     <div class="card shadow">
       <div class="card-body">
-        <h5 class="card-title"><span class="icon icon-logs">&#128203;</span>Latest Log Entries</h5>
+        <h5 class="card-title d-flex justify-content-between align-items-center">
+          <span><span class="icon icon-logs">&#128203;</span>Latest Log Entries</span>
+          <button id="toggle-eval-logs" class="btn btn-sm btn-outline-info">Show Only [EVAL] Logs</button>
+        </h5>
         <pre class="mt-3" id="system-logs-pre">${data.logs
           .split("\n")
           .slice(-10)
@@ -476,7 +475,7 @@ async function fetchMetrics() {
 // --- DETAILED STRATEGY EVALUATIONS ---
 async function fetchDetailedEvaluations() {
   try {
-    const response = await fetch("/api/strategy_evaluations_detailed"); // Podrías añadir ?limit=50
+    const response = await fetch("/api/strategy_evaluations_detailed");
     if (!response.ok) {
       console.error(
         `HTTP error! status: ${response.status}`,
@@ -484,136 +483,152 @@ async function fetchDetailedEvaluations() {
       );
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-    const evaluations = await response.json();
-    displayDetailedEvaluations(evaluations);
+    const data = await response.json();
+    displayDetailedEvaluations(data); // PASA EL OBJETO COMPLETO
   } catch (error) {
     console.error("Error fetching detailed evaluations:", error);
     const container = document.getElementById("detailed-evaluations-container");
     if (container) {
       container.innerHTML =
-        "<p>Error al cargar los detalles de evaluación. Ver la consola para más detalles.</p>";
+        "<p>Error loading strategy evaluations. Check the console for details.</p>";
     }
   }
 }
 
-function formatJsonForDisplay(jsonData) {
-  if (jsonData === null || jsonData === undefined) {
-    return "N/A";
-  }
-  if (typeof jsonData === "object") {
-    // Si hay un error de parseo, mostrarlo
-    if (jsonData.error && jsonData.raw_value) {
-      return `Error: ${jsonData.error}. Raw: <pre>${jsonData.raw_value}</pre>`;
-    }
-    if (jsonData.error) {
-      return `Error: ${jsonData.error}`;
-    }
+function formatCountdown(seconds) {
+  if (seconds < 0) return "00:00:00";
 
-    let html = '<ul style="margin: 0; padding-left: 15px; font-size: 0.9em;">';
-    for (const key in jsonData) {
-      if (jsonData.hasOwnProperty(key)) {
-        let value = jsonData[key];
-        if (typeof value === "object" && value !== null) {
-          // Para sub-objetos, podrías simplemente convertirlos a string o formatearlos más
-          value = JSON.stringify(value, null, 2);
-          html += `<li><strong>${key}:</strong> <pre style="margin: 2px 0; white-space: pre-wrap; word-break: break-all;">${value}</pre></li>`;
-        } else {
-          html += `<li><strong>${key}:</strong> ${value}</li>`;
-        }
-      }
-    }
-    html += "</ul>";
-    if (Object.keys(jsonData).length === 0) {
-      return "Vacío";
-    }
-    return html;
-  }
-  return jsonData;
-}
+  // For daily evaluations, we need days, hours, minutes, seconds
+  const d = Math.floor(seconds / 86400); // Days (86400 = 24*60*60)
+  const h = Math.floor((seconds % 86400) / 3600)
+    .toString()
+    .padStart(2, "0");
+  const m = Math.floor((seconds % 3600) / 60)
+    .toString()
+    .padStart(2, "0");
+  const s = Math.floor(seconds % 60)
+    .toString()
+    .padStart(2, "0");
 
-function badgeForDecision(decision) {
-  if (!decision) return '<span class="badge bg-secondary">N/A</span>';
-  const d = decision.toLowerCase();
-  if (d === "buy") return '<span class="badge bg-success">BUY</span>';
-  if (d === "sell") return '<span class="badge bg-danger">SELL</span>';
-  if (d === "hold") return '<span class="badge bg-secondary">HOLD</span>';
-  return `<span class="badge bg-info">${decision}</span>`;
-}
-
-function collapsibleJsonCell(jsonData, idPrefix) {
-  if (
-    !jsonData ||
-    (typeof jsonData === "object" && Object.keys(jsonData).length === 0)
-  ) {
-    return '<span class="text-muted">Vacío</span>';
-  }
-  const uid = idPrefix + "_" + Math.random().toString(36).substr(2, 6);
-  let short = "";
-  let full = "";
-  if (typeof jsonData === "object") {
-    short =
-      Object.keys(jsonData)
-        .slice(0, 2)
-        .map(
-          (k) =>
-            `<strong>${k}</strong>: ${
-              typeof jsonData[k] === "object"
-                ? JSON.stringify(jsonData[k])
-                : jsonData[k]
-            }`
-        )
-        .join(", ") + (Object.keys(jsonData).length > 2 ? ", ..." : "");
-    full = `<pre class='bg-dark text-light p-2 rounded' style='max-height:300px;overflow:auto;'>${JSON.stringify(
-      jsonData,
-      null,
-      2
-    )}</pre>`;
+  // Show days only if there are days remaining
+  if (d > 0) {
+    return `${d}d ${h}:${m}:${s}`;
   } else {
-    short = String(jsonData);
-    full = `<pre class='bg-dark text-light p-2 rounded'>${jsonData}</pre>`;
+    return `${h}:${m}:${s}`;
   }
-  return `
-    <span>${short} <a href="#" class="text-info" data-bs-toggle="collapse" data-bs-target="#${uid}" aria-expanded="false" aria-controls="${uid}">[+]</a></span>
-    <div class="collapse mt-1" id="${uid}">${full}</div>
-  `;
 }
 
-function displayDetailedEvaluations(evaluations) {
+function displayDetailedEvaluations(data) {
   const container = document.getElementById("detailed-evaluations-container");
   if (!container) {
     console.error("#detailed-evaluations-container not found.");
     return;
   }
-  // Card wrapper and section title
-  let html = `
-    <div class="section-title"><span class="icon icon-eval">&#128202;</span>STRATEGY EVALUATIONS</div>
-    <div class="row g-4">
-      <div class="col-12">
-        <div class="card shadow mb-4">
-          <div class="card-body">
-            <h5 class="card-title"><span class="icon icon-eval">&#128202;</span>Recent Strategy Evaluations</h5>
-            <div class="table-responsive">
-              <table class="table table-dark table-striped" id="detailed-evaluations-table">
-                <thead>
-                  <tr>
-                    <th>Timestamp</th>
-                    <th>Decision</th>
-                    <th>Price</th>
-                    <th>Reason</th>
-                    <th>Indicators</th>
-                    <th>Conditions</th>
-                    <th>Notes</th>
-                  </tr>
-                </thead>
-                <tbody></tbody>
-              </table>
-            </div>
-          </div>
+  // --- New: Status and countdown header ---
+  let html = `<div class="section-title"><span class="icon icon-eval">&#128202;</span>STRATEGY EVALUATIONS</div>`;
+  html += `<div class="row g-4 mb-3">
+    <div class="col-md-6">      <div class="card shadow-sm mb-2">
+        <div class="card-body d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-2">
+          <div><b>Live Trading Status:</b> <span id="status-live-trading" class="badge bg-info"></span></div>
+          <div><b>Next daily evaluation in:</b> <span id="countdown-live-trading" class="fw-bold"></span></div>
         </div>
       </div>
     </div>
-  `;
+    <div class="col-md-6">
+      <div class="card shadow-sm mb-2">
+        <div class="card-body d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-2">
+          <div><b>Paper Trading Status:</b> <span id="status-live-paper" class="badge bg-info"></span></div>
+          <div><b>Next daily evaluation in:</b> <span id="countdown-live-paper" class="fw-bold"></span></div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+  html += `  <div class="card shadow mb-4">
+    <div class="card-body">      <h5 class="card-title">
+        <span><span class="icon icon-eval">&#128202;</span>Recent Strategy Evaluations</span>
+      </h5>
+      <div class="table-responsive">
+        <table class="table table-dark table-striped" id="detailed-evaluations-table">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Decision</th>
+              <th>Price</th>
+              <th>Reason</th>
+              <th>Indicators</th>
+              <th>Conditions</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>`;
   container.innerHTML = html;
+  // --- Fill status and countdown ---
+  const now = data.now;
+  const statusInfo = data.status_info;
+  // Almacenar la diferencia entre el tiempo del servidor y el cliente
+  const serverClientTimeDiff = now - Math.floor(Date.now() / 1000);
+
+  // Variable para controlar las actualizaciones automáticas
+  if (!window._lastAutoUpdateTime) {
+    window._lastAutoUpdateTime = {};
+  }
+  function updateCountdowns() {
+    [
+      {
+        bot: "live_trading",
+        statusId: "status-live-trading",
+        countdownId: "countdown-live-trading",
+      },
+      {
+        bot: "live_paper",
+        statusId: "status-live-paper",
+        countdownId: "countdown-live-paper",
+      },
+    ].forEach(({ bot, statusId, countdownId }) => {
+      const status = statusInfo[bot]?.status || "Unknown";
+      const nextEval = statusInfo[bot]?.next_evaluation_ts || now;
+
+      // Calculate remaining time, adjusting for server-client time difference
+      const clientNowSeconds = Math.floor(Date.now() / 1000);
+      const adjustedClientTime = clientNowSeconds + serverClientTimeDiff;
+      const seconds = Math.max(0, Math.floor(nextEval - adjustedClientTime));
+
+      // If countdown reaches 0, schedule data refresh
+      if (seconds <= 1) {
+        const currentTime = Date.now();
+        // Avoid too frequent updates (maximum once every 5 seconds per bot)
+        if (
+          !window._lastAutoUpdateTime[bot] ||
+          currentTime - window._lastAutoUpdateTime[bot] > 5000
+        ) {
+          // Wait 2 seconds to give time for the evaluation to complete, then update
+          setTimeout(() => {
+            console.log(
+              `Updating evaluation data for ${bot} after countdown reached 0`
+            );
+            fetchDetailedEvaluations();
+            window._lastAutoUpdateTime[bot] = currentTime + 2000;
+          }, 2000);
+        }
+      }
+
+      const statusElem = document.getElementById(statusId);
+      const countdownElem = document.getElementById(countdownId);
+
+      if (statusElem) statusElem.textContent = status;
+      if (countdownElem) countdownElem.textContent = formatCountdown(seconds);
+    });
+  }
+  updateCountdowns();
+  if (window._evalCountdownInterval)
+    clearInterval(window._evalCountdownInterval);
+  window._evalCountdownInterval = setInterval(updateCountdowns, 1000);
+
+  // ...existing code for table rendering...
   const tableBody = document.querySelector("#detailed-evaluations-table tbody");
   if (!tableBody) {
     console.error("#detailed-evaluations-table tbody not found.");
@@ -624,6 +639,7 @@ function displayDetailedEvaluations(evaluations) {
     detailedEvaluationsDataTable = null;
   }
   tableBody.innerHTML = "";
+  const evaluations = data.evaluations;
   if (!evaluations || evaluations.length === 0) {
     const row = tableBody.insertRow();
     const cell = row.insertCell();
@@ -640,11 +656,11 @@ function displayDetailedEvaluations(evaluations) {
     const headerCell = headerRow.insertCell();
     headerCell.colSpan = 7;
     headerCell.innerHTML = `<b>Bot: ${
-      bot === "live_trading" ? "Live Trading" : "Live Paper"
+      bot === "live_trading" ? "Live Trading" : "Paper Trading"
     }</b>`;
     headerCell.className = "table-primary";
-    headerCell.style.backgroundColor = "#ff5733"; // Cambia el color de fondo a un naranja más visible
-    headerCell.style.color = "#000000"; // Cambia el color de las letras a negro para contraste
+    headerCell.style.backgroundColor = "#ff5733";
+    headerCell.style.color = "#000000";
     // Evaluation rows
     const botEvals = evaluations.filter((e) => e.bot_name === bot);
     if (botEvals.length === 0) {
@@ -657,6 +673,19 @@ function displayDetailedEvaluations(evaluations) {
       botEvals.forEach((evaluation, idx) => {
         const row = tableBody.insertRow();
         row.classList.add("align-middle");
+
+        // Destacar visualmente las evaluaciones más recientes (primera de cada bot)
+        if (idx === 0) {
+          row.classList.add("new-evaluation");
+          row.style.backgroundColor = "#1d432d";
+          // Animación simple para destacar nuevas evaluaciones
+          setTimeout(() => {
+            // Usar una transición CSS para un cambio de color suave
+            row.style.transition = "background-color 3s ease-out";
+            row.style.backgroundColor = "";
+          }, 500);
+        }
+
         // Timestamp
         row.insertCell().textContent = evaluation.timestamp || "N/A";
         // Decision with badge
@@ -707,18 +736,39 @@ function displayDetailedEvaluations(evaluations) {
   }, 300);
 }
 
-// Llama a las funciones cuando la página cargue
-document.addEventListener("DOMContentLoaded", () => {
-  fetchMetrics();
-  fetchLogs();
-  // fetchBtcChartData(); // Comentado para evitar error de función no definida
-  fetchDetailedEvaluations(); // Añadir la nueva función
+// Badge for decision (BUY/SELL/HOLD)
+function badgeForDecision(decision) {
+  if (!decision) return "<span class='badge bg-secondary'>N/A</span>";
+  const d = decision.toLowerCase();
+  if (d === "buy") return "<span class='badge bg-success'>BUY</span>";
+  if (d === "sell") return "<span class='badge bg-danger'>SELL</span>";
+  if (d === "hold") return "<span class='badge bg-secondary'>HOLD</span>";
+  return `<span class='badge bg-secondary'>${decision.toUpperCase()}</span>`;
+}
 
-  setInterval(fetchMetrics, 10000); // cada 10s
-  setInterval(fetchLogs, 30000); // cada 30s
-  // No es necesario refrescar el gráfico de BTC tan frecuentemente a menos que cambie mucho
-  // setInterval(fetchBtcChartData, 60000 * 5); // cada 5 minutos
-  setInterval(fetchDetailedEvaluations, 60000 * 2); // cada 2 minutos
+// Helper to render a collapsible JSON cell for table rows
+function collapsibleJsonCell(obj, id) {
+  if (!obj) return '<span class="text-secondary">N/A</span>';
+  let jsonStr = "";
+  try {
+    jsonStr = JSON.stringify(obj, null, 2);
+  } catch (e) {
+    jsonStr = String(obj);
+  }
+  return `
+    <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#${id}" aria-expanded="false" aria-controls="${id}">
+      View
+    </button>
+    <div class="collapse mt-1" id="${id}">
+      <pre class="bg-dark text-light p-2 rounded small" style="max-height:200px;overflow:auto;">${jsonStr}</pre>
+    </div>
+  `;
+}
+
+// Llama a las funciones cuando la página cargue (para compatibilidad con código anterior)
+// Este bloque se mantiene por compatibilidad pero se está usando initApp() como punto principal
+document.addEventListener("DOMContentLoaded", () => {
+  // No hacemos nada aquí ya que initApp() se encarga de inicializar todo
 });
 
 // Function to toggle between dark and light theme
@@ -742,13 +792,13 @@ async function initApp() {
   const savedTheme = localStorage.getItem("theme") || "dark";
   darkMode = savedTheme === "dark";
   document.documentElement.setAttribute("data-theme", savedTheme);
-
   // Get initial data
   const data = await fetchMetrics();
   if (!data) return;
 
-  // Get logs
+  // Get logs and strategy evaluations
   await fetchLogs();
+  await fetchDetailedEvaluations();
 
   // Set up periodic updates
   setInterval(() => {
@@ -758,6 +808,11 @@ async function initApp() {
   setInterval(() => {
     fetchLogs();
   }, refreshInterval * 2);
+
+  // Update strategy evaluations every 5 seconds to keep countdown accurate
+  setInterval(() => {
+    fetchDetailedEvaluations();
+  }, refreshInterval);
 }
 
 // Start the application when the DOM is ready
